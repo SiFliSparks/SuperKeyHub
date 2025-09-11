@@ -15,7 +15,7 @@
 ## 快速开始
 - 克隆仓库
 ```
-git clone https://github.com/jingxbw-work/SuperKeyHub.git
+git clone https://github.com/OpenSiFli/SuperKeyHub
 ```
 ### 环境要求
 - Windows 10/11 (推荐)
