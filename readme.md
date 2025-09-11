@@ -40,6 +40,11 @@ python main.py
 ```bash
 python setup_dependencies.py --build-only
 ```
+#### 快速使用方法
+- 1.将SuperKey通过USB连接到电脑，确认SuperKey的串口号
+- 2.在Hub上的串口配置页面点击串口号旁边的刷新按钮，刷新出SuperKey的串口号
+- 3.正确配置波特率1000000，点击连接，并点击数据下发按钮
+- 稍等片刻，信息将同步至SuperKey屏幕
 ## 第三方组件
 - LibreHardwareMonitor - Mozilla Public License 2.0
 - Flet - Apache-2.0
