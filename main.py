@@ -3,45 +3,6 @@
 import os, sys, time, asyncio, ctypes, math, winreg
 import flet as ft
 
-def setup_dpi_compatibility():
-    if os.name != "nt":
-        return "非Windows系统"
-    
-    try:
-        user32 = ctypes.windll.user32
-        gdi32 = ctypes.windll.gdi32
-        
-        try:
-            system_dpi = int(user32.GetDpiForSystem())
-        except:
-            hdc = user32.GetDC(0)
-            system_dpi = gdi32.GetDeviceCaps(hdc, 88) if hdc else 96
-            if hdc: user32.ReleaseDC(0, hdc)
-        
-        dpi_scale = system_dpi / 96.0
-        
-        if 1.4 <= dpi_scale <= 1.6:
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(0)
-                return f"已禁用DPI感知 (DPI: {system_dpi})"
-            except:
-                return f"无法设置DPI模式 (DPI: {system_dpi})"
-        
-        elif dpi_scale != 1.0:
-            try:
-                ctypes.windll.user32.SetProcessDPIAware()
-                return f"已启用基本DPI感知 (DPI: {system_dpi})"
-            except:
-                return f"DPI设置失败 (DPI: {system_dpi})"
-        
-        else:
-            return f"100%缩放，无需DPI处理 (DPI: {system_dpi})"
-            
-    except Exception as e:
-        return "DPI检测失败，使用默认设置"
-
-dpi_status = setup_dpi_compatibility()
-
 from hw_monitor import HardwareMonitor, bytes2human, pct_str, mhz_str, temp_str, watt_str
 from weather_api import QWeatherAPI as WeatherAPI
 from stock_api import StockAPI
@@ -144,45 +105,6 @@ def color_by_load(p, theme: ThemeColors):
         return theme.get("WARN")
     else:
         return theme.get("BAD")
-
-def detect_system_dpi() -> int:
-    if os.name != "nt": 
-        return 96
-    
-    dpi = 96
-    try:
-        user32 = ctypes.windll.user32
-        
-        try:
-            user32.GetDpiForSystem.restype = ctypes.c_uint
-            sys_dpi = int(user32.GetDpiForSystem())
-            if sys_dpi >= 48:
-                dpi = sys_dpi
-                return dpi
-        except Exception:
-            pass
-        
-        try:
-            gdi32 = ctypes.windll.gdi32
-            hdc = user32.GetDC(0)
-            if hdc:
-                dpi_x = gdi32.GetDeviceCaps(hdc, 88)
-                user32.ReleaseDC(0, hdc)
-                if dpi_x >= 48:
-                    dpi = int(dpi_x)
-                    return dpi
-        except Exception:
-            pass
-            
-    except Exception:
-        pass
-        
-    return dpi
-
-def calculate_dpi_scale_factor() -> float:
-    system_dpi = detect_system_dpi()
-    scale_factor = system_dpi / 96.0
-    return scale_factor
 
 def _find_hwnd_by_title(title: str, retry=20, delay=0.2):
     if os.name != "nt": return 0
@@ -322,15 +244,7 @@ class NavigationItem:
 
 async def main(page: ft.Page):
     theme = ThemeColors()
-    
-    system_dpi = detect_system_dpi()
-    
-    if os.name == "nt":
-        try:
-            user32 = ctypes.windll.user32
-            screensize = user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
-        except:
-            pass
+
     
     page.window.title_bar_hidden = True
     page.window.frameless = False
@@ -338,26 +252,10 @@ async def main(page: ft.Page):
     page.window.maximizable = True
     page.window.minimizable = True
     
-    base_width = 1400
-    base_height = 900
-    
-    dpi_scale = system_dpi / 96.0
-    if 1.4 <= dpi_scale <= 1.6:
-        page.window.width = int(base_width * 0.85)
-        page.window.height = int(base_height * 1.15)
-        page.window.min_width = 680
-        page.window.min_height = 690
-        
-        try:
-            page.theme_mode = ft.ThemeMode.SYSTEM
-        except:
-            pass
-            
-    else:
-        page.window.width = base_width
-        page.window.height = base_height
-        page.window.min_width = 800
-        page.window.min_height = 600
+    page.window.width = 1400
+    page.window.height = 900
+    page.window.min_width = 800
+    page.window.min_height = 600
     
     page.window.bgcolor = "#00000000"
     page.window.shadow = True
@@ -368,19 +266,6 @@ async def main(page: ft.Page):
     
     page.adaptive = True
     page.scroll = None
-    
-    if 1.4 <= dpi_scale <= 1.6:
-        try:
-            page.rtl = False
-            page.auto_scroll = False
-        except Exception:
-            pass
-
-    DEFAULT_BASE_RADIUS = 8
-    state = {"dpi": detect_system_dpi(), "auto_dpi": True, "base_radius": DEFAULT_BASE_RADIUS}
-    def calc_radius():
-        base = state["base_radius"]
-        return int(round(base * (state["dpi"]/96))) if state["auto_dpi"] else int(base)
 
     hw_monitor = HardwareMonitor()
     weather_api = WeatherAPI()
@@ -391,9 +276,6 @@ async def main(page: ft.Page):
     finsh_sender.set_data_sources(hw_monitor, weather_api, stock_api)
 
     sidebar_expanded = {"value": False}
-
-    lhm_state = ft.Text(f"LHM: {'已加载' if hw_monitor.is_lhm_loaded() else '未加载'}", 
-                       size=12, color=theme.get("TEXT_TERTIARY"))
 
     def do_minimize(e):
         page.window.minimized = True
@@ -435,9 +317,8 @@ async def main(page: ft.Page):
     title_row = ft.Container(
         content=ft.Row([
             hamburger_btn, 
-            ft.Row([logo_img, ft.Text("Build v1.0.8 - 开发版本", color=theme.get("TEXT_SECONDARY"), size=14)], spacing=10),
+            ft.Row([logo_img, ft.Text("SuperKey v1.1.0", color=theme.get("TEXT_SECONDARY"), size=14)], spacing=10),
             ft.Container(expand=True), 
-            lhm_state, 
             title_buttons
         ], 
         alignment="spaceBetween", 
@@ -703,7 +584,7 @@ async def main(page: ft.Page):
     weather_temp = ft.Text("--°C", size=48, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY"))
     weather_feels_like = ft.Text("体感 --°C", size=16, color=theme.get("TEXT_SECONDARY"))
     weather_desc = ft.Text("获取中...", size=20, weight=ft.FontWeight.W_500, color=theme.get("TEXT_SECONDARY"))
-    weather_quality = ft.Text("天气质量: --", size=14, color=theme.get("TEXT_TERTIARY"))
+    weather_quality = ft.Text("空气质量: --", size=14, color=theme.get("TEXT_TERTIARY"))
     weather_comfort = ft.Text("舒适度: --", size=14, color=theme.get("TEXT_TERTIARY"))
     
     weather_humidity = ft.Text("湿度: --%", size=14, color=theme.get("TEXT_TERTIARY"))
@@ -730,7 +611,7 @@ async def main(page: ft.Page):
             weather_feels_like.value = f"体感 {data['weather_feels_like']:.1f}°C"
             weather_desc.value = data['weather_desc']
             
-            weather_quality.value = f"天气质量: {data['weather_quality']}"
+            weather_quality.value = f"空气质量: {data['weather_quality']}"
             weather_comfort.value = f"舒适度: {data['weather_comfort_index']}"
             
             quality_color = theme.get("GOOD") if data['weather_quality'] in ["优秀", "良好"] else \
@@ -1605,7 +1486,7 @@ async def main(page: ft.Page):
         content=ft.Column([
             ft.Text("关于", size=24, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
             ft.Text("SuperKey_Windows支持工具", size=16, color=theme.get("TEXT_SECONDARY")),
-            ft.Text("Build v1.0.8 - 开发版本，适配固件1.0版本", size=14, color=theme.get("TEXT_TERTIARY")),
+            ft.Text("Build v1.1.0 - 适配固件1.0版本", size=14, color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
             ft.Text("功能模块", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
             ft.Text("• 硬件监控: CPU、GPU、内存、磁盘、网络实时监控", size=12, color=theme.get("TEXT_TERTIARY")),
@@ -1770,9 +1651,6 @@ async def main(page: ft.Page):
 
     async def enable_backdrop_and_fix_layout():
         await asyncio.sleep(0.5)
-        
-        system_dpi = detect_system_dpi()
-        dpi_scale = system_dpi / 96.0
         
         try:
             current_width = page.window.width
