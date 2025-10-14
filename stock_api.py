@@ -14,12 +14,12 @@ class StockAPI:
         
         self.supported_indexes = {
             '1010': '上证指数',
-            '1011': '深证成指', 
+            '1011': '深证成指',
             '1012': '沪深300',
             '1013': '创业板指',
             '1014': '中小板指',
             '1015': '恒生指数',
-            '1016': '国企指数', 
+            '1016': '国企指数',
             '1017': '红筹指数',
             '1111': '道琼斯',
             '1112': '标普500',
@@ -86,28 +86,6 @@ class StockAPI:
                 'success': False
             }
             return error_data
-    
-    def _get_remaining_cache_time(self, symbol: str) -> str:
-        if symbol not in self.cache:
-            return "立即"
-        
-        cache_time = self.cache[symbol].get('timestamp', 0)
-        next_update = cache_time + self.cache_duration
-        remaining = next_update - time.time()
-        
-        if remaining <= 0:
-            return "立即"
-        
-        hours = int(remaining // 3600)
-        minutes = int((remaining % 3600) // 60)
-        seconds = int(remaining % 60)
-        
-        if hours > 0:
-            return f"{hours}小时{minutes}分后"
-        elif minutes > 0:
-            return f"{minutes}分{seconds}秒后"
-        else:
-            return f"{seconds}秒后"
     
     def _fetch_single_index(self, inxid: str) -> Optional[Dict[str, Any]]:
         try:
@@ -249,31 +227,3 @@ class StockAPI:
                 del self.cache[symbol]
         else:
             self.cache.clear()
-    
-    def get_cache_status(self) -> Dict[str, Any]:
-        cache_info = {}
-        for symbol, data in self.cache.items():
-            cache_time = data.get('timestamp', 0)
-            age = time.time() - cache_time
-            remaining = max(0, self.cache_duration - age)
-            
-            cache_info[symbol] = {
-                'name': self.supported_indexes.get(symbol, symbol),
-                'age_minutes': round(age / 60, 1),
-                'remaining_minutes': round(remaining / 60, 1),
-                'valid': remaining > 0,
-                'source': data['data'].get('source', '未知')
-            }
-        
-        return {
-            'cached_symbols': list(self.cache.keys()),
-            'cache_count': len(self.cache),
-            'cache_duration_minutes': self.cache_duration // 60,
-            'current_index': self.current_index,
-            'current_index_name': self.supported_indexes.get(self.current_index),
-            'supported_indexes': self.supported_indexes,
-            'cache_details': cache_info,
-            'update_frequency': '每30分钟更新一次',
-            'last_request_time': self.last_request_time,
-            'api_configured': True
-        }

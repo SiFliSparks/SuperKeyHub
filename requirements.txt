@@ -1,17 +1,19 @@
-# Windows系统监控项目依赖
-# Windows System Monitor Dependencies
+# SuperKey Project Dependencies
 
-# 必需依赖 / Required Dependencies
+# Required Dependencies
 flet
 psutil
 pyserial
 requests
 
-# 可选依赖 / Optional Dependencies
+# Optional Dependencies
 # wmi
 # pynvml
 # pythonnet
 # colorama
 
-# 注意: LibreHardwareMonitorLib.dll 会自动下载
-# Note: LibreHardwareMonitorLib.dll will be downloaded automatically
+# Notes:
+# - LibreHardwareMonitorLib.dll 会自动下载
+# - LibreHardwareMonitorLib.dll will be downloaded automatically
+# - 开发依赖需要 --dev 参数安装
+# - Development dependencies require --dev flag

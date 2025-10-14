@@ -28,7 +28,6 @@ class SerialAssistant:
         
         self.on_data_received: Optional[Callable] = None
         self.on_connection_changed: Optional[Callable] = None
-        self.on_error: Optional[Callable] = None
         
         self.config = {
             'port': '',
@@ -101,9 +100,8 @@ class SerialAssistant:
         try:
             self.serial_port.rts = self.config['rts']
             self.serial_port.dtr = self.config['dtr']
-        except Exception as e:
-            if self.on_error:
-                self.on_error(f"RTS/DTR设置错误: {str(e)}")
+        except Exception:
+            self.stats['errors'] += 1
     
     def get_rts_dtr_status(self) -> Dict[str, Any]:
         if not self.serial_port:
@@ -112,7 +110,7 @@ class SerialAssistant:
         try:
             return {
                 'rts': self.serial_port.rts,
-                'dtr': self.serial_port.dtr, 
+                'dtr': self.serial_port.dtr,
                 'connected': self.is_connected,
                 'config_rts': self.config['rts'],
                 'config_dtr': self.config['dtr']
@@ -126,9 +124,8 @@ class SerialAssistant:
                 self.serial_port.rts = not self.serial_port.rts
                 self.config['rts'] = self.serial_port.rts
                 return self.serial_port.rts
-            except Exception as e:
-                if self.on_error:
-                    self.on_error(f"切换RTS失败: {str(e)}")
+            except Exception:
+                self.stats['errors'] += 1
         return None
     
     def toggle_dtr(self):
@@ -137,9 +134,8 @@ class SerialAssistant:
                 self.serial_port.dtr = not self.serial_port.dtr
                 self.config['dtr'] = self.serial_port.dtr
                 return self.serial_port.dtr
-            except Exception as e:
-                if self.on_error:
-                    self.on_error(f"切换DTR失败: {str(e)}")
+            except Exception:
+                self.stats['errors'] += 1
         return None
     
     def reset_target_device(self):
@@ -163,9 +159,8 @@ class SerialAssistant:
             
             return True
             
-        except Exception as e:
-            if self.on_error:
-                self.on_error(f"复位设备失败: {str(e)}")
+        except Exception:
+            self.stats['errors'] += 1
             return False
     
     def connect(self) -> bool:
@@ -173,7 +168,7 @@ class SerialAssistant:
             return True
         
         try:
-            bytesize_map = {5: serial.FIVEBITS, 6: serial.SIXBITS, 
+            bytesize_map = {5: serial.FIVEBITS, 6: serial.SIXBITS,
                            7: serial.SEVENBITS, 8: serial.EIGHTBITS}
             stopbits_map = {1: serial.STOPBITS_ONE, 1.5: serial.STOPBITS_ONE_POINT_FIVE,
                            2: serial.STOPBITS_TWO}
@@ -219,10 +214,9 @@ class SerialAssistant:
             
             return True
             
-        except Exception as e:
+        except Exception:
             self.is_connected = False
-            if self.on_error:
-                self.on_error(f"连接失败: {str(e)}")
+            self.stats['errors'] += 1
             return False
     
     def disconnect(self):
@@ -284,10 +278,8 @@ class SerialAssistant:
                 else:
                     time.sleep(0.001)
                     
-            except serial.SerialException as e:
+            except serial.SerialException:
                 self.stats['errors'] += 1
-                if self.on_error:
-                    self.on_error(f"接收错误: {str(e)}")
                 time.sleep(0.1)
             except Exception:
                 self.stats['errors'] += 1
@@ -307,17 +299,14 @@ class SerialAssistant:
                     
             except queue.Empty:
                 continue
-            except serial.SerialException as e:
+            except serial.SerialException:
                 self.stats['errors'] += 1
-                if self.on_error:
-                    self.on_error(f"发送错误: {str(e)}")
             except Exception:
                 self.stats['errors'] += 1
     
     def send_data(self, data: str, format: Optional[DataFormat] = None):
         if not self.is_connected:
-            if self.on_error:
-                self.on_error("串口未连接")
+            self.stats['errors'] += 1
             return False
         
         format = format or self.tx_format
@@ -338,17 +327,14 @@ class SerialAssistant:
                 self.tx_queue.put(bytes_data, timeout=0.1)
                 return True
             except queue.Full:
-                if self.on_error:
-                    self.on_error("发送队列已满")
+                self.stats['errors'] += 1
                 return False
                 
-        except ValueError as e:
-            if self.on_error:
-                self.on_error(f"数据格式错误: {str(e)}")
+        except ValueError:
+            self.stats['errors'] += 1
             return False
-        except Exception as e:
-            if self.on_error:
-                self.on_error(f"发送失败: {str(e)}")
+        except Exception:
+            self.stats['errors'] += 1
             return False
     
     def get_received_data(self, format: Optional[DataFormat] = None) -> str:
