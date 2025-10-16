@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 import os, sys, time, asyncio, ctypes, math, winreg
 import flet as ft
+import sys
+import os
 
 from hw_monitor import HardwareMonitor, bytes2human, pct_str, mhz_str, temp_str, watt_str
 from weather_api import QWeatherAPI as WeatherAPI
@@ -243,9 +245,15 @@ class NavigationItem:
             self.divider.color = theme.get("DIVIDER")
 
 async def main(page: ft.Page):
+    page.window_icon = "assets/app.ico"
     theme = ThemeColors()
-
+    page.window_width = 100
+    page.window_height = 100
+    page.update()
     
+    import time
+    time.sleep(0.1)   
+
     page.window.title_bar_hidden = True
     page.window.frameless = False
     page.window.resizable = True
@@ -262,7 +270,7 @@ async def main(page: ft.Page):
     page.bgcolor = "#00000000"
     page.padding = 0
     page.spacing = 0
-    page.title = "Build v1.0.8 - 开发版本"
+    page.title = "Build v1.1.0 - SuperKey"
     
     page.adaptive = True
     page.scroll = None
@@ -1649,63 +1657,12 @@ async def main(page: ft.Page):
 
     build_disks(hw_monitor.get_disk_data())
 
-    async def enable_backdrop_and_fix_layout():
-        await asyncio.sleep(0.5)
-        
-        try:
-            current_width = page.window.width
-            current_height = page.window.height
-            
-            page.window.width = current_width - 5
-            page.window.height = current_height - 5
-            page.update()
-            await asyncio.sleep(0.1)
-            
-            page.window.width = current_width
-            page.window.height = current_height
-            page.update()
-            await asyncio.sleep(0.2)
-            
-        except Exception as e:
-            try:
-                original_maximized = page.window.maximized
-                
-                page.window.maximized = True
-                page.update()
-                await asyncio.sleep(0.2)
-                
-                page.window.maximized = original_maximized
-                page.update()
-                await asyncio.sleep(0.2)
-                
-            except Exception as e2:
-                try:
-                    for i in range(8):
-                        page.update()
-                        await asyncio.sleep(0.1)
-                    
-                    try:
-                        content_host.update()
-                        shell.update()
-                    except:
-                        pass
-                    page.update()
-                    
-                except Exception as e3:
-                    try:
-                        page.window.width = page.window.width + 1
-                        page.update()
-                        await asyncio.sleep(0.1)
-                        page.window.width = page.window.width - 1
-                        page.update()
-                        await asyncio.sleep(0.1)
-                    except:
-                        pass
-        
-        await asyncio.sleep(0.3)
+    async def apply_backdrop_only():
+        """仅应用背景效果，不调整窗口尺寸"""
+        await asyncio.sleep(0.8)
         apply_backdrop_for_page(page, theme, prefer_mica=True)
-        
-    page.run_task(enable_backdrop_and_fix_layout)
+
+    page.run_task(apply_backdrop_only)
 
     def update_all_theme_colors():
         
@@ -1919,4 +1876,9 @@ async def main(page: ft.Page):
 
     page.run_task(updater)
 
-ft.app(target=main, view=ft.AppView.FLET_APP, assets_dir="assets")
+ft.app(
+    target=main, 
+    view=ft.AppView.FLET_APP, 
+    assets_dir="assets",
+    use_color_emoji=True,
+)

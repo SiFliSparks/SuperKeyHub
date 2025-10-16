@@ -46,3 +46,7 @@ libs/LibreHardwareMonitorLib.dll
 # Temporary files
 temp/
 tmp/
+
+# requirements files
+requirements.txt
+build_requirements.txt
