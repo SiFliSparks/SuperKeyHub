@@ -40,6 +40,7 @@ python main.py
 ```bash
 python setup_dependencies.py --build-only
 ```
+- 要构建，请使用build.py
 #### 快速使用方法
 - 1.将SuperKey通过USB连接到电脑，确认SuperKey的串口号
 - 2.在Hub上的串口配置页面点击串口号旁边的刷新按钮，刷新出SuperKey的串口号
