@@ -280,8 +280,12 @@ async def main(page: ft.Page):
     stock_api = StockAPI(default_symbol="1010")
     serial_assistant = SerialAssistant()
     
-    finsh_sender = FinshDataSender(serial_assistant)
-    finsh_sender.set_data_sources(hw_monitor, weather_api, stock_api)
+    finsh_sender = FinshDataSender(
+        serial_assistant=serial_assistant,
+        weather_api=weather_api, 
+        stock_api=stock_api,
+        hardware_monitor=hw_monitor
+    )
 
     sidebar_expanded = {"value": False}
 
@@ -999,7 +1003,7 @@ async def main(page: ft.Page):
     )
     
     rts_control_switch = ft.Switch(
-        label="RTS信号",
+        label="RTS",
         value=False,
         active_color=theme.get("ACCENT"),
         disabled=True,
@@ -1007,7 +1011,7 @@ async def main(page: ft.Page):
     )
 
     dtr_control_switch = ft.Switch(
-        label="DTR信号", 
+        label="DTR", 
         value=False,
         active_color=theme.get("ACCENT"),
         disabled=True,
