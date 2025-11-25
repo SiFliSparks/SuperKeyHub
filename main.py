@@ -455,7 +455,7 @@ async def main(page: ft.Page):
     
     weather_api_host_field = ft.TextField(
         label="API Host",
-        value="https://devapi.qweather.com",
+        value="",
         width=300,
         helper_text="你可以在控制台-设置中查看你的API Host",
         on_change=lambda e: update_weather_config()
@@ -492,39 +492,14 @@ async def main(page: ft.Page):
         if config_complete:
             weather_config_status.value = "配置状态: 待保存"
             weather_config_status.color = theme.get("WARN")
-            weather_test_btn.disabled = False
             weather_save_btn.disabled = False
         else:
             weather_config_status.value = "配置状态: 不完整"
             weather_config_status.color = theme.get("BAD")
-            weather_test_btn.disabled = True
             weather_save_btn.disabled = True
         
         page.update()
     
-    def test_weather_connection():
-        try:
-            weather_api.update_config(
-                api_key=weather_api_key_field.value.strip(),
-                api_host=weather_api_host_field.value.strip(),
-                use_jwt=weather_use_jwt_switch.value,
-                default_city=weather_default_city_field.value.strip()
-            )
-            
-            result = weather_api.test_connection()
-            
-            if result['success']:
-                weather_config_status.value = f"连接成功: {result['message']}"
-                weather_config_status.color = theme.get("GOOD")
-            else:
-                weather_config_status.value = f"连接失败: {result['message']}"
-                weather_config_status.color = theme.get("BAD")
-                
-        except Exception as e:
-            weather_config_status.value = f"测试失败: {str(e)}"
-            weather_config_status.color = theme.get("BAD")
-            
-        page.update()
     
     def save_weather_config():
         try:
@@ -551,13 +526,6 @@ async def main(page: ft.Page):
             
         page.update()
     
-    weather_test_btn = ft.ElevatedButton(
-        "测试连接",
-        icon="wifi_tethering",
-        on_click=lambda e: test_weather_connection(),
-        disabled=True
-    )
-    
     weather_save_btn = ft.ElevatedButton(
         "保存配置",
         icon="save",
@@ -573,21 +541,21 @@ async def main(page: ft.Page):
             ], spacing=8),
             
             ft.Text("API认证", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            ft.Column([
+            ft.Row([
                 weather_api_key_field,
                 weather_api_host_field,
                 weather_use_jwt_switch,
             ], spacing=12),
             
             ft.Text("城市设置", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            weather_default_city_field,
-            
-            ft.Text("配置管理", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            weather_config_status,
             ft.Row([
-                weather_test_btn,
-                weather_save_btn
-            ], spacing=12)
+                weather_default_city_field,
+                ft.Container(width=1),
+                weather_save_btn,
+                ft.Container(expand=True),
+            ], spacing=12),
+            
+            weather_config_status,
         ], spacing=16),
         padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
     ))
@@ -928,7 +896,7 @@ async def main(page: ft.Page):
     baudrate_dropdown = ft.Dropdown(
         label="波特率",
         width=140,
-        value="115200",
+        value="1000000",
         options=[ft.dropdown.Option(str(b)) for b in serial_assistant.get_baudrate_list()] + [ft.dropdown.Option("custom", text="自定义…")],
         dense=True
     )
@@ -936,7 +904,7 @@ async def main(page: ft.Page):
     baudrate_custom = ft.TextField(
         label="自定义",
         width=120,
-        value="115200",
+        value="1000000",
         visible=False,
         keyboard_type=ft.KeyboardType.NUMBER,
         text_align=ft.TextAlign.CENTER,
@@ -1043,16 +1011,10 @@ async def main(page: ft.Page):
         size=12,
         color=theme.get("TEXT_TERTIARY")
     )
-    
-    finsh_test_btn = ft.ElevatedButton(
-        "发送测试序列",
-        icon="send",
-        on_click=lambda e: send_finsh_test(),
-        disabled=True
-    )
+
     
     finsh_stats_text = ft.Text(
-        "已发送: 0 条命令",
+        "已发送: 0 字段",
         size=12,
         color=theme.get("TEXT_TERTIARY")
     )
@@ -1065,7 +1027,6 @@ async def main(page: ft.Page):
                     finsh_enable_switch.value = True
                     finsh_status_text.value = "数据下发: 运行中"
                     finsh_status_text.color = theme.get("GOOD")
-                    finsh_test_btn.disabled = False
                 else:
                     finsh_enable_switch.value = False
                     finsh_status_text.value = "数据下发: 启动失败"
@@ -1080,15 +1041,6 @@ async def main(page: ft.Page):
             finsh_status_text.value = "数据下发: 已停止"
             finsh_status_text.color = theme.get("TEXT_TERTIARY")
         
-        page.update()
-    
-    def send_finsh_test():
-        if finsh_sender.send_test_sequence():
-            finsh_status_text.value = "数据下发: 测试序列发送成功"
-            finsh_status_text.color = theme.get("GOOD")
-        else:
-            finsh_status_text.value = "数据下发: 测试序列发送失败"
-            finsh_status_text.color = theme.get("BAD")
         page.update()
     
     def toggle_connection(connect: bool):
@@ -1142,7 +1094,6 @@ async def main(page: ft.Page):
             finsh_enable_switch.value = False
             finsh_status_text.value = "数据下发: 串口已断开"
             finsh_status_text.color = theme.get("TEXT_TERTIARY")
-            finsh_test_btn.disabled = True
             
         page.update()
     
@@ -1167,7 +1118,6 @@ async def main(page: ft.Page):
             ], spacing=8),
             finsh_enable_switch,
             finsh_status_text,
-            ft.Row([finsh_test_btn, finsh_stats_text], spacing=12)
         ], spacing=12),
         width=350,
         padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
@@ -1366,7 +1316,7 @@ async def main(page: ft.Page):
             tx_stats_text.value = f"发送: {stats['tx_bytes']} 字节"
             
             finsh_stats = finsh_sender.get_status()
-            finsh_stats_text.value = f"已发送: {finsh_stats['stats']['commands_sent']} 条命令"
+            finsh_stats_text.value = f"已发送: {finsh_stats['stats']['commands_sent']} 字段"
             
             page.update()
     
@@ -1394,7 +1344,7 @@ async def main(page: ft.Page):
     
     time_interval_field = ft.TextField(
         label="时间数据间隔(秒)",
-        value="1.0",
+        value="1000.0",
         width=150,
         keyboard_type=ft.KeyboardType.NUMBER,
         on_change=lambda e: finsh_sender.configure(time_interval=float(e.control.value) if e.control.value else 1.0)
@@ -1402,7 +1352,7 @@ async def main(page: ft.Page):
     
     api_interval_field = ft.TextField(
         label="API数据间隔(秒)",
-        value="30.0", 
+        value="2.0", 
         width=150,
         keyboard_type=ft.KeyboardType.NUMBER,
         on_change=lambda e: finsh_sender.configure(api_interval=float(e.control.value) if e.control.value else 30.0)
@@ -1410,7 +1360,7 @@ async def main(page: ft.Page):
     
     performance_interval_field = ft.TextField(
         label="性能数据间隔(秒)",
-        value="5.0",
+        value="1.0",
         width=150, 
         keyboard_type=ft.KeyboardType.NUMBER,
         on_change=lambda e: finsh_sender.configure(performance_interval=float(e.control.value) if e.control.value else 5.0)
@@ -1418,7 +1368,7 @@ async def main(page: ft.Page):
     
     command_interval_field = ft.TextField(
         label="命令间隔(毫秒)",
-        value="5",
+        value="1000",
         width=150,
         keyboard_type=ft.KeyboardType.NUMBER,
         on_change=lambda e: finsh_sender.configure(min_command_interval=int(e.control.value) if e.control.value else 5)
@@ -1428,19 +1378,19 @@ async def main(page: ft.Page):
         time_data_switch.value = True
         api_data_switch.value = True
         performance_data_switch.value = True
-        time_interval_field.value = "1.0"
-        api_interval_field.value = "30.0"
-        performance_interval_field.value = "5.0"
-        command_interval_field.value = "5"
+        time_interval_field.value = "1000.0"
+        api_interval_field.value = "2.0"
+        performance_interval_field.value = "1.0"
+        command_interval_field.value = "1000"
         
         finsh_sender.configure(
             send_time_data=True,
             send_api_data=True,
             send_performance_data=True,
-            time_interval=1.0,
-            api_interval=30.0,
+            time_interval=1000.0,
+            api_interval=2.0,
             performance_interval=5.0,
-            min_command_interval=5
+            min_command_interval=1000
         )
         page.update()
     
@@ -1458,24 +1408,29 @@ async def main(page: ft.Page):
             ], spacing=8),
             
             ft.Text("数据类型控制", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            ft.Column([
+            ft.Row([
                 time_data_switch,
                 api_data_switch, 
                 performance_data_switch
-            ], spacing=8),
+            ], spacing=16),
             
-            ft.Text("时间间隔配置", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
             ft.Row([
-                time_interval_field,
-                api_interval_field,
-                performance_interval_field
-            ], spacing=12),
-            
-            ft.Text("其他配置", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            ft.Row([
-                command_interval_field,
-                ft.Container(expand=True),
-                reset_defaults_btn
+                ft.Column([
+                    ft.Text("时间间隔配置", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
+                    ft.Row([
+                        time_interval_field,
+                        api_interval_field,
+                        performance_interval_field
+                    ], spacing=12),
+                ], spacing=8),
+                ft.Container(width=20),
+                ft.Column([
+                    ft.Text("其他配置", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
+                    ft.Row([
+                        command_interval_field,
+                        reset_defaults_btn
+                    ], spacing=12)
+                ], spacing=8),
             ], spacing=12)
         ], spacing=16),
         padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
@@ -1498,13 +1453,7 @@ async def main(page: ft.Page):
         content=ft.Column([
             ft.Text("关于", size=24, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
             ft.Text("SuperKey_Windows支持工具", size=16, color=theme.get("TEXT_SECONDARY")),
-            ft.Text("Build v1.1.0 - 适配固件1.0版本", size=14, color=theme.get("TEXT_TERTIARY")),
-            ft.Container(height=20),
-            ft.Text("功能模块", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            ft.Text("• 硬件监控: CPU、GPU、内存、磁盘、网络实时监控", size=12, color=theme.get("TEXT_TERTIARY")),
-            ft.Text("• 天气服务: 支持多城市天气查询", size=12, color=theme.get("TEXT_TERTIARY")),
-            ft.Text("• 股票指数: 全球主要股票指数实时查询", size=12, color=theme.get("TEXT_TERTIARY")),
-            ft.Text("• 串口调试: 支持ASCII/HEX格式数据收发、RTS/DTR控制和Finsh数据下发", size=12, color=theme.get("TEXT_TERTIARY")),
+            ft.Text("Build v1.5.0 - 适配固件1.0版本", size=14, color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
             ft.Text("制作团队", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
             ft.Text("• 解博文 xiebowen1@outlook.com", size=12, color=theme.get("TEXT_TERTIARY")),
@@ -1635,9 +1584,9 @@ async def main(page: ft.Page):
         config = weather_api.get_config()
         
         weather_api_key_field.value = config.get('api_key', '')
-        weather_api_host_field.value = config.get('api_host', 'https://devapi.qweather.com')
+        weather_api_host_field.value = config.get('api_host', '')
         weather_use_jwt_switch.value = config.get('use_jwt', False)
-        weather_default_city_field.value = config.get('default_city', '杭州')
+        weather_default_city_field.value = config.get('default_city', '城市名')
         
         update_weather_config()
     
@@ -1861,7 +1810,7 @@ async def main(page: ft.Page):
                 
                 if finsh_sender.enabled:
                     finsh_status = finsh_sender.get_status()
-                    finsh_stats_text.value = f"已发送: {finsh_status['stats']['commands_sent']} 条命令"
+                    finsh_stats_text.value = f"已发送: {finsh_status['stats']['commands_sent']} 字段"
                     
                     error_count = finsh_status['stats']['errors']
                     if error_count > 0:

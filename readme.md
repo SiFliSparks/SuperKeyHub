@@ -34,11 +34,14 @@ python main.py
 python setup_dependencies.py --dev
 python main.py
 ```
-- 仅构建
+- 仅安装构建工具
 ```bash
 python setup_dependencies.py --build-only
 ```
-- 要构建，请使用build.py
+- 要构建，请在运行以上命令后，使用
+```bash
+python build.py --all
+```
 #### 快速使用方法
 - 1.将SuperKey通过USB连接到电脑，确认SuperKey的串口号
 - 2.在Hub上的串口配置页面点击串口号旁边的刷新按钮，刷新出SuperKey的串口号

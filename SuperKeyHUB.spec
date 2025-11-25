@@ -35,6 +35,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='C:\\Users\\xiebo\\AppData\\Local\\Temp\\7e0c1cb9-65ab-4c69-984b-f093c3e4d69a',
+    version='C:\\Users\\xiebo\\AppData\\Local\\Temp\\2643a753-457d-4b40-bdbf-bbe506e01953',
     icon=['assets\\app.ico'],
 )

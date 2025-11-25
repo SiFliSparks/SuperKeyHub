@@ -31,7 +31,7 @@ class SerialAssistant:
         
         self.config = {
             'port': '',
-            'baudrate': 115200,
+            'baudrate': 1000000,
             'bytesize': 8,
             'stopbits': 1,
             'parity': 'N',
@@ -73,10 +73,9 @@ class SerialAssistant:
     
     def get_baudrate_list(self) -> List[int]:
         return [
-            300, 600, 1200, 2400, 4800, 9600, 14400, 19200,
             38400, 57600, 115200, 128000, 230400, 256000,
             460800, 500000, 576000, 921600, 1000000, 1152000,
-            1500000, 2000000, 2500000, 3000000, 3500000, 4000000
+            1500000, 2000000
         ]
     
     def configure(self, **kwargs):

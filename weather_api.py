@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 class QWeatherAPI:
-    def __init__(self, api_key: str = "", default_city: str = "hangzhou", api_host: str = "", use_jwt: bool = False):
+    def __init__(self, api_key: str = "", default_city: str = "beijing", api_host: str = "", use_jwt: bool = False):
         self.api_key = api_key or ""
         self.default_city = default_city
         self.use_jwt = use_jwt
