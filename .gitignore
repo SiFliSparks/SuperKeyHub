@@ -48,5 +48,4 @@ temp/
 tmp/
 
 # requirements files
-requirements.txt
 build_requirements.txt
