@@ -186,29 +186,57 @@ jobs:
           pip install pyinstaller>=5.13.0
 
       - name: Download LibreHardwareMonitor DLL
-        run: |
-          python setup_dependencies.py --build-only
-        continue-on-error: true
-
-      - name: Manual Download LHM DLL (Fallback)
-        if: failure()
-        run: |
-          mkdir -p libs
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -match "net4" -and $_.name -match ".zip" } | Select-Object -First 1
-          if ($asset) {
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "lhm.zip"
-            Expand-Archive -Path "lhm.zip" -DestinationPath "lhm_temp" -Force
-            Get-ChildItem -Path "lhm_temp" -Recurse -Filter "LibreHardwareMonitorLib.dll" | Copy-Item -Destination "libs/" -Force
-            Remove-Item -Path "lhm.zip" -Force
-            Remove-Item -Path "lhm_temp" -Recurse -Force
-          }
         shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "libs" | Out-Null
+          
+          Write-Host "Fetching latest release info..."
+          $headers = @{ "User-Agent" = "GitHub-Actions" }
+          
+          try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest" -Headers $headers
+            $version = $release.tag_name
+            Write-Host "Latest version: $version"
+            
+            $asset = $release.assets | Where-Object { $_.name -match "net4" -and $_.name -match "\.zip$" } | Select-Object -First 1
+            
+            if (-not $asset) {
+              $asset = $release.assets | Where-Object { $_.name -match "\.zip$" -and $_.name -notmatch "source" } | Select-Object -First 1
+            }
+            
+            if ($asset) {
+              Write-Host "Downloading: $($asset.name)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "lhm.zip" -Headers $headers
+              
+              Write-Host "Extracting..."
+              Expand-Archive -Path "lhm.zip" -DestinationPath "lhm_temp" -Force
+              
+              $dll = Get-ChildItem -Path "lhm_temp" -Recurse -Filter "LibreHardwareMonitorLib.dll" | Select-Object -First 1
+              if ($dll) {
+                Copy-Item -Path $dll.FullName -Destination "libs/LibreHardwareMonitorLib.dll" -Force
+                Write-Host "DLL extracted successfully to libs/"
+              } else {
+                Write-Host "ERROR: DLL not found in archive"
+                exit 1
+              }
+              
+              Remove-Item -Path "lhm.zip" -Force -ErrorAction SilentlyContinue
+              Remove-Item -Path "lhm_temp" -Recurse -Force -ErrorAction SilentlyContinue
+            } else {
+              Write-Host "ERROR: No suitable asset found"
+              exit 1
+            }
+          } catch {
+            Write-Host "ERROR: Failed to download - $_"
+            exit 1
+          }
 
       - name: Verify Resource Files
+        shell: powershell
         run: |
           if (Test-Path "libs/LibreHardwareMonitorLib.dll") {
-            Write-Host "LibreHardwareMonitorLib.dll exists"
+            $size = (Get-Item "libs/LibreHardwareMonitorLib.dll").Length / 1KB
+            Write-Host "LibreHardwareMonitorLib.dll exists ($([math]::Round($size, 1)) KB)"
           } else {
             Write-Host "LibreHardwareMonitorLib.dll missing"
             exit 1
@@ -219,13 +247,13 @@ jobs:
           } else {
             Write-Host "Logo file missing (optional)"
           }
-        shell: powershell
 
       - name: Build Executable
         run: |
           python build.py
 
       - name: Verify Build Artifacts
+        shell: powershell
         run: |
           if (Test-Path "dist/SuperKeyHUB.exe") {
             $size = (Get-Item "dist/SuperKeyHUB.exe").Length / 1MB
@@ -234,7 +262,6 @@ jobs:
             Write-Host "Build failed - exe not found"
             exit 1
           }
-        shell: powershell
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
