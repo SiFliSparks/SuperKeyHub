@@ -11,6 +11,14 @@ from stock_api import StockAPI
 from serial_assistant import SerialAssistant, DataFormat
 from finsh_data_sender import FinshDataSender
 
+# ==============================================================================
+# Version Configuration
+# ==============================================================================
+APP_VERSION = "1.5.0"
+FIRMWARE_COMPAT = "1.0"
+APP_NAME = "SuperKey"
+# ==============================================================================
+
 def detect_windows_theme() -> str:
     if os.name != "nt":
         return "dark"
@@ -270,7 +278,7 @@ async def main(page: ft.Page):
     page.bgcolor = "#00000000"
     page.padding = 0
     page.spacing = 0
-    page.title = "Build v1.1.0 - SuperKey"
+    page.title = f"Build v{APP_VERSION} - {APP_NAME}"
     
     page.adaptive = True
     page.scroll = None
@@ -329,7 +337,7 @@ async def main(page: ft.Page):
     title_row = ft.Container(
         content=ft.Row([
             hamburger_btn, 
-            ft.Row([logo_img, ft.Text("SuperKey v1.1.0", color=theme.get("TEXT_SECONDARY"), size=14)], spacing=10),
+            ft.Row([logo_img, ft.Text(f"{APP_NAME} v{APP_VERSION}", color=theme.get("TEXT_SECONDARY"), size=14)], spacing=10),
             ft.Container(expand=True), 
             title_buttons
         ], 
@@ -1453,7 +1461,7 @@ async def main(page: ft.Page):
         content=ft.Column([
             ft.Text("关于", size=24, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
             ft.Text("SuperKey_Windows支持工具", size=16, color=theme.get("TEXT_SECONDARY")),
-            ft.Text("Build v1.5.0 - 适配固件1.0版本", size=14, color=theme.get("TEXT_TERTIARY")),
+            ft.Text(f"Build v{APP_VERSION} - 适配固件{FIRMWARE_COMPAT}版本", size=14, color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
             ft.Text("制作团队", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
             ft.Text("• 解博文 xiebowen1@outlook.com", size=12, color=theme.get("TEXT_TERTIARY")),
