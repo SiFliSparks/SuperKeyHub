@@ -1,5 +1,4 @@
 # SuperKeyHUB CI/CD Pipeline
-# 自动化测试、语法检查和 Windows 构建
 
 name: SuperKeyHUB CI
 
@@ -10,62 +9,51 @@ on:
       - 'v*'
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 env:
   PYTHON_VERSION: '3.11'
 
 jobs:
-  # ============================================
-  # 代码质量检查 (跨平台)
-  # ============================================
   lint:
-    name: 代码检查
+    name: Code Check
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 安装检查工具
+      - name: Install Lint Tools
         run: |
           python -m pip install --upgrade pip
           pip install flake8 pyflakes
 
-      - name: 语法检查 (pyflakes)
+      - name: Syntax Check (pyflakes)
         run: |
-          # 仅检查语法错误，忽略导入问题（因为有些是 Windows 专用模块）
           pyflakes *.py || true
 
-      - name: 代码风格检查 (flake8)
+      - name: Code Style Check (flake8)
         run: |
-          # E501: 行太长 (忽略)
-          # F401: 导入未使用 (忽略，部分是条件导入)
-          # E402: 模块级导入不在顶部 (忽略)
-          # F403/F405: 通配符导入 (忽略)
           flake8 *.py --count --select=E9,F63,F7,F82 --show-source --statistics || true
           flake8 *.py --count --exit-zero --max-complexity=15 --max-line-length=120 --ignore=E501,F401,E402,F403,F405 --statistics
 
-  # ============================================
-  # 依赖安装测试 (Windows)
-  # ============================================
   test-dependencies:
-    name: 依赖测试 (Windows)
+    name: Dependency Test (Windows)
     runs-on: windows-latest
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 缓存 pip 依赖
+      - name: Cache pip Dependencies
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
@@ -73,45 +61,42 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: 安装核心依赖
+      - name: Install Core Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flet psutil pyserial requests colorama
 
-      - name: 安装可选依赖
+      - name: Install Optional Dependencies
         run: |
           pip install wmi pythonnet pynvml
         continue-on-error: true
 
-      - name: 验证导入
+      - name: Verify Imports
         run: |
           python -c "import flet; print(f'Flet version: {flet.version.version}')"
           python -c "import psutil; print(f'psutil version: {psutil.__version__}')"
           python -c "import serial; print('pyserial OK')"
           python -c "import requests; print(f'requests version: {requests.__version__}')"
 
-      - name: 验证可选模块
+      - name: Verify Optional Modules
         run: |
           python -c "import wmi; print('WMI OK')" || echo "WMI not available"
           python -c "import clr; print('pythonnet OK')" || echo "pythonnet not available"
 
-  # ============================================
-  # 模块测试 (Windows)
-  # ============================================
   test-modules:
-    name: 模块测试
+    name: Module Test
     runs-on: windows-latest
     needs: test-dependencies
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 缓存 pip 依赖
+      - name: Cache pip Dependencies
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
@@ -119,32 +104,34 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: 安装依赖
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flet psutil pyserial requests colorama wmi pythonnet pynvml
         continue-on-error: true
 
-      - name: 测试 weather_api 模块
+      - name: Test weather_api Module
         run: |
           python -c "
           from weather_api import QWeatherAPI
           api = QWeatherAPI()
           print('weather_api module loaded successfully')
-          print(f'Supported weather codes: {len(api.weather_conditions)} types')
+          print(f'Default city: {api.default_city}')
+          print(f'Predefined cities count: {len(api.predefined_cities)}')
           "
 
-      - name: 测试 stock_api 模块
+      - name: Test stock_api Module
         run: |
           python -c "
           from stock_api import StockAPI
           api = StockAPI()
           indexes = api.get_supported_indexes()
           print('stock_api module loaded successfully')
-          print(f'Supported indexes: {list(indexes.values())}')
+          print(f'Supported index codes: {list(indexes.keys())}')
+          print(f'Total indexes: {len(indexes)}')
           "
 
-      - name: 测试 serial_assistant 模块
+      - name: Test serial_assistant Module
         run: |
           python -c "
           from serial_assistant import SerialAssistant, DataFormat
@@ -152,14 +139,14 @@ jobs:
           print(f'DataFormat options: {[e.name for e in DataFormat]}')
           "
 
-      - name: 测试 finsh_data_sender 模块
+      - name: Test finsh_data_sender Module
         run: |
           python -c "
           from finsh_data_sender import FinshDataSender
           print('finsh_data_sender module loaded successfully')
           "
 
-      - name: 测试 hw_monitor 模块
+      - name: Test hw_monitor Module
         run: |
           python -c "
           from hw_monitor import HardwareMonitor, bytes2human, pct_str
@@ -168,25 +155,22 @@ jobs:
           print(f'pct_str test: {pct_str(75.5)}')
           "
 
-  # ============================================
-  # 构建 Windows 可执行文件
-  # ============================================
   build:
-    name: 构建 Windows EXE
+    name: Build Windows EXE
     runs-on: windows-latest
     needs: [lint, test-modules]
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 设置 Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: 缓存 pip 依赖
+      - name: Cache pip Dependencies
         uses: actions/cache@v4
         with:
           path: ~\AppData\Local\pip\Cache
@@ -195,76 +179,102 @@ jobs:
             ${{ runner.os }}-pip-build-
             ${{ runner.os }}-pip-
 
-      - name: 安装构建依赖
+      - name: Install Build Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flet psutil pyserial requests colorama wmi pythonnet pynvml
-          pip install pyinstaller>=5.13.0
+          pip install pyinstaller>=5.13.0 pillow Pillow
 
-      - name: 下载 LibreHardwareMonitor DLL
-        run: |
-          python setup_dependencies.py --build-only
-        continue-on-error: true
-
-      - name: 手动下载 LHM DLL (备用方案)
-        if: failure()
-        run: |
-          # 如果自动下载失败，使用 curl 手动下载
-          mkdir -p libs
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest"
-          $asset = $release.assets | Where-Object { $_.name -match "net4" -and $_.name -match ".zip" } | Select-Object -First 1
-          if ($asset) {
-            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "lhm.zip"
-            Expand-Archive -Path "lhm.zip" -DestinationPath "lhm_temp" -Force
-            Get-ChildItem -Path "lhm_temp" -Recurse -Filter "LibreHardwareMonitorLib.dll" | Copy-Item -Destination "libs/" -Force
-            Remove-Item -Path "lhm.zip" -Force
-            Remove-Item -Path "lhm_temp" -Recurse -Force
-          }
+      - name: Download LibreHardwareMonitor DLL
         shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "libs" | Out-Null
+          
+          Write-Host "Fetching latest release info..."
+          $headers = @{ "User-Agent" = "GitHub-Actions" }
+          
+          try {
+            $release = Invoke-RestMethod -Uri "https://api.github.com/repos/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest" -Headers $headers
+            $version = $release.tag_name
+            Write-Host "Latest version: $version"
+            
+            $asset = $release.assets | Where-Object { $_.name -match "net4" -and $_.name -match "\.zip$" } | Select-Object -First 1
+            
+            if (-not $asset) {
+              $asset = $release.assets | Where-Object { $_.name -match "\.zip$" -and $_.name -notmatch "source" } | Select-Object -First 1
+            }
+            
+            if ($asset) {
+              Write-Host "Downloading: $($asset.name)"
+              Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "lhm.zip" -Headers $headers
+              
+              Write-Host "Extracting..."
+              Expand-Archive -Path "lhm.zip" -DestinationPath "lhm_temp" -Force
+              
+              $dll = Get-ChildItem -Path "lhm_temp" -Recurse -Filter "LibreHardwareMonitorLib.dll" | Select-Object -First 1
+              if ($dll) {
+                Copy-Item -Path $dll.FullName -Destination "libs/LibreHardwareMonitorLib.dll" -Force
+                Write-Host "DLL extracted successfully to libs/"
+              } else {
+                Write-Host "ERROR: DLL not found in archive"
+                exit 1
+              }
+              
+              Remove-Item -Path "lhm.zip" -Force -ErrorAction SilentlyContinue
+              Remove-Item -Path "lhm_temp" -Recurse -Force -ErrorAction SilentlyContinue
+            } else {
+              Write-Host "ERROR: No suitable asset found"
+              exit 1
+            }
+          } catch {
+            Write-Host "ERROR: Failed to download - $_"
+            exit 1
+          }
 
-      - name: 验证资源文件
+      - name: Verify Resource Files
+        shell: powershell
         run: |
           if (Test-Path "libs/LibreHardwareMonitorLib.dll") {
-            Write-Host "✓ LibreHardwareMonitorLib.dll exists"
+            $size = (Get-Item "libs/LibreHardwareMonitorLib.dll").Length / 1KB
+            Write-Host "LibreHardwareMonitorLib.dll exists ($([math]::Round($size, 1)) KB)"
           } else {
-            Write-Host "✗ LibreHardwareMonitorLib.dll missing"
+            Write-Host "LibreHardwareMonitorLib.dll missing"
             exit 1
           }
           
           if (Test-Path "assets/logo_484x74.png") {
-            Write-Host "✓ Logo file exists"
+            Write-Host "Logo file exists"
           } else {
-            Write-Host "⚠ Logo file missing (optional)"
+            Write-Host "Logo file missing (optional)"
           }
-        shell: powershell
 
-      - name: 构建可执行文件
+      - name: Build Executable
         run: |
           python build.py
+        env:
+          PYTHONUTF8: 1
+          PYTHONIOENCODING: utf-8
 
-      - name: 验证构建产物
+      - name: Verify Build Artifacts
+        shell: powershell
         run: |
           if (Test-Path "dist/SuperKeyHUB.exe") {
             $size = (Get-Item "dist/SuperKeyHUB.exe").Length / 1MB
-            Write-Host "✓ SuperKeyHUB.exe built successfully ($([math]::Round($size, 1)) MB)"
+            Write-Host "SuperKeyHUB.exe built successfully ($([math]::Round($size, 1)) MB)"
           } else {
-            Write-Host "✗ Build failed - exe not found"
+            Write-Host "Build failed - exe not found"
             exit 1
           }
-        shell: powershell
 
-      - name: 上传构建产物
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: SuperKeyHUB-Windows-x64
           path: dist/SuperKeyHUB.exe
           retention-days: 30
 
-  # ============================================
-  # 创建 Release (仅在 tag 推送时)
-  # ============================================
   release:
-    name: 发布 Release
+    name: Create Release
     runs-on: ubuntu-latest
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -272,42 +282,42 @@ jobs:
       contents: write
     
     steps:
-      - name: 检出代码
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 下载构建产物
+      - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
           name: SuperKeyHUB-Windows-x64
           path: release/
 
-      - name: 获取版本号
+      - name: Get Version
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
-      - name: 创建 Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: SuperKeyHUB ${{ steps.get_version.outputs.VERSION }}
           body: |
             ## SuperKeyHUB ${{ steps.get_version.outputs.VERSION }}
             
-            ### 下载
-            - `SuperKeyHUB.exe` - Windows 可执行文件
+            ### Download
+            - `SuperKeyHUB.exe` - Windows executable
             
-            ### 使用说明
-            1. 将 SuperKey 通过 USB 连接到电脑
-            2. 运行 SuperKeyHUB.exe
-            3. 在串口配置页面选择正确的串口号
-            4. 配置波特率为 1000000
-            5. 点击连接，然后点击数据下发按钮
+            ### Usage
+            1. Connect SuperKey to your computer via USB
+            2. Run SuperKeyHUB.exe
+            3. Select the correct COM port in the serial configuration page
+            4. Set baud rate to 1000000
+            5. Click Connect, then click the Data Send button
             
-            ### 系统要求
+            ### System Requirements
             - Windows 10/11
             - .NET Framework 4.7.2+
             
-            ### 注意事项
-            - 首次运行可能需要管理员权限（硬件监控功能）
+            ### Notes
+            - First run may require administrator privileges (for hardware monitoring)
           files: |
             release/SuperKeyHUB.exe
           draft: false
