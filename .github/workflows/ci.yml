@@ -251,6 +251,9 @@ jobs:
       - name: Build Executable
         run: |
           python build.py
+        env:
+          PYTHONUTF8: 1
+          PYTHONIOENCODING: utf-8
 
       - name: Verify Build Artifacts
         shell: powershell
