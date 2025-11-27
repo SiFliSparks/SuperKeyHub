@@ -127,7 +127,8 @@ jobs:
           api = StockAPI()
           indexes = api.get_supported_indexes()
           print('stock_api module loaded successfully')
-          print(f'Supported indexes: {list(indexes.values())}')
+          print(f'Supported index codes: {list(indexes.keys())}')
+          print(f'Total indexes: {len(indexes)}')
           "
 
       - name: Test serial_assistant Module
