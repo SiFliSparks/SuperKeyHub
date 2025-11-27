@@ -183,7 +183,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install flet psutil pyserial requests colorama wmi pythonnet pynvml
-          pip install pyinstaller>=5.13.0
+          pip install pyinstaller>=5.13.0 pillow Pillow
 
       - name: Download LibreHardwareMonitor DLL
         shell: powershell
