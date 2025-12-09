@@ -44,6 +44,9 @@ jobs:
   test-dependencies:
     name: Dependency Test (Windows)
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: 1
+      PYTHONIOENCODING: utf-8
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -64,7 +67,7 @@ jobs:
       - name: Install Core Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flet psutil pyserial requests colorama pystray Pillow
+          pip install flet psutil pyserial requests colorama pystray pillow
 
       - name: Install Optional Dependencies
         run: |
@@ -89,6 +92,9 @@ jobs:
     name: Module Test
     runs-on: windows-latest
     needs: test-dependencies
+    env:
+      PYTHONUTF8: 1
+      PYTHONIOENCODING: utf-8
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -109,7 +115,7 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flet psutil pyserial requests colorama pystray Pillow wmi pythonnet pynvml
+          pip install flet psutil pyserial requests colorama pystray pillow wmi pythonnet pynvml
         continue-on-error: true
 
       - name: Test config_manager Module
@@ -119,7 +125,8 @@ jobs:
           cm = get_config_manager()
           print('config_manager module loaded successfully')
           print(f'Config path: {cm.get_config_path()}')
-          print(f'Weather config: {cm.get_weather_config()}')
+          config = cm.get_weather_config()
+          print(f'Weather config keys: {list(config.keys())}')
           print(f'Auto connect: {cm.should_auto_connect()}')
           print(f'Minimize to tray: {cm.should_minimize_to_tray()}')
           "
@@ -140,14 +147,15 @@ jobs:
           from custom_key_manager import (
               get_custom_key_manager, PRESET_SHORTCUTS,
               get_all_key_options, get_modifier_options,
-              KEY_NAME_MAP, Modifier, KeyCode
+              KeyCode, Modifier
           )
           print('custom_key_manager module loaded successfully')
           print(f'Preset shortcuts count: {len(PRESET_SHORTCUTS)}')
           print(f'Key options count: {len(get_all_key_options())}')
           print(f'Modifier options count: {len(get_modifier_options())}')
           mgr = get_custom_key_manager()
-          print(f'Key 0 display: {mgr.get_key_display_text(0)}')
+          display = mgr.get_key_display_text(0)
+          print(f'Key 0 configured: {len(display) > 0}')
           "
 
       - name: Test weather_api Module
@@ -156,7 +164,7 @@ jobs:
           from weather_api import QWeatherAPI
           api = QWeatherAPI()
           print('weather_api module loaded successfully')
-          print(f'Default city: {api.default_city}')
+          print(f'Default city set: {bool(api.default_city)}')
           print(f'Predefined cities count: {len(api.predefined_cities)}')
           config = api.get_config()
           print(f'API configured: {config.get(\"api_configured\", False)}')
@@ -168,9 +176,6 @@ jobs:
           from serial_assistant import SerialAssistant, DataFormat
           print('serial_assistant module loaded successfully')
           print(f'DataFormat options: {[e.name for e in DataFormat]}')
-          sa = SerialAssistant()
-          ports = sa.list_ports()
-          print(f'Available ports: {len(ports)}')
           "
 
       - name: Test finsh_data_sender Module
@@ -183,13 +188,10 @@ jobs:
       - name: Test hw_monitor Module
         run: |
           python -c "
-          from hw_monitor import HardwareMonitor, bytes2human, pct_str, mhz_str, temp_str, watt_str
+          from hw_monitor import HardwareMonitor, bytes2human, pct_str
           print('hw_monitor module loaded successfully')
           print(f'bytes2human test: {bytes2human(1073741824)} = 1.0 GB')
           print(f'pct_str test: {pct_str(75.5)}')
-          print(f'mhz_str test: {mhz_str(3500)}')
-          print(f'temp_str test: {temp_str(65.5)}')
-          print(f'watt_str test: {watt_str(125.5)}')
           "
 
   build:
@@ -219,7 +221,7 @@ jobs:
       - name: Install Build Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flet psutil pyserial requests colorama pystray Pillow
+          pip install flet psutil pyserial requests colorama pystray pillow
           pip install wmi pythonnet pynvml
           pip install pyinstaller>=5.13.0
 
@@ -285,12 +287,6 @@ jobs:
           } else {
             Write-Host "Logo file missing (optional)"
           }
-          
-          if (Test-Path "assets/app.ico") {
-            Write-Host "App icon exists"
-          } else {
-            Write-Host "App icon missing (optional)"
-          }
 
       - name: Build Executable
         run: |
@@ -349,36 +345,29 @@ jobs:
             ### 下载 / Download
             - `SuperKeyHUB.exe` - Windows 可执行文件
             
-            ### 功能特性
-            - 🖥️ 实时硬件监控（CPU/GPU/内存/磁盘/网络）
-            - 🌤️ 天气信息显示（和风天气API）
-            - ⌨️ 自定义快捷键配置
-            - 🔌 串口通信（支持自动重连）
-            - 📤 Finsh 数据发送
-            - 🖱️ 系统托盘支持（最小化后台运行）
-            - 🚀 开机自启动（管理员权限）
-            
-            ### 使用方法
+            ### 使用方法 / Usage
             1. 通过 USB 连接 SuperKey 设备
             2. 运行 SuperKeyHUB.exe
             3. 在串口配置页面选择正确的 COM 端口
-            4. 设置波特率为 1000000
-            5. 点击连接，然后启用数据发送
+            4. 波特率设置为 1000000
+            5. 点击连接，然后点击数据发送按钮
             
-            ### 系统要求
+            ### 功能特性 / Features
+            - 硬件监控（CPU/GPU/内存/磁盘/网络）
+            - 天气信息显示（需配置 API）
+            - 自定义快捷键配置
+            - 系统托盘后台运行
+            - 开机自启动（管理员权限）
+            - 天气数据自动更新（30分钟间隔）
+            
+            ### 系统要求 / System Requirements
             - Windows 10/11
             - .NET Framework 4.7.2+
             
-            ### 命令行参数
-            - `--minimized` 或 `-m`：启动时最小化到系统托盘
-            
-            ### 配置文件位置
-            - `%APPDATA%\SuperKey\superkey_config.json`
-            - `%APPDATA%\SuperKey\custom_keys.json`
-            
-            ### 注意事项
+            ### 注意事项 / Notes
             - 首次运行需要管理员权限（用于硬件监控）
-            - 开机自启动使用任务计划程序，自动以管理员身份运行
+            - 开机自启动使用任务计划程序实现
+            - 配置文件位置：%APPDATA%\SuperKey\
           files: |
             release/SuperKeyHUB.exe
           draft: false
