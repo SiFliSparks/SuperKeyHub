@@ -1295,7 +1295,7 @@ async def main(page: ft.Page):
             ft.Text("• 思澈科技（南京）提供技术支持", size=12, color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
             ft.Text("更新日志 2025年12月9日", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            ft.Text("• 修复：天气信息自动更新，APP自动获取权限"size=12, color=theme.get("TEXT_TERTIARY")),
+            ft.Text("• 修复：天气信息自动更新，APP自动获取权限",size=12, color=theme.get("TEXT_TERTIARY")),
             ft.Text("• 新增：开机自启，自动检测与连接，配置保存，后台运行，自定义按键配置",size=12, color=theme.get("TEXT_TERTIARY")),
             ft.Text("• 删除：复杂的串口配置页面和数据下发间隔配置", size=12, color=theme.get("TEXT_TERTIARY")),
             ft.Text("• 本次更新与旧版本固件部分兼容", size=12, color=theme.get("TEXT_TERTIARY")),
