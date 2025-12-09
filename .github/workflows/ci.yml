@@ -164,10 +164,11 @@ jobs:
           from weather_api import QWeatherAPI
           api = QWeatherAPI()
           print('weather_api module loaded successfully')
-          print(f'Default city set: {bool(api.default_city)}')
-          print(f'Predefined cities count: {len(api.predefined_cities)}')
+          print('Default city set:', bool(api.default_city))
+          print('Predefined cities count:', len(api.predefined_cities))
           config = api.get_config()
-          print(f'API configured: {config.get(\"api_configured\", False)}')
+          key = 'api_configured'
+          print('API configured:', config.get(key, False))
           "
 
       - name: Test serial_assistant Module
