@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Finsh数据发送模块
+支持天气数据延迟发送
+"""
 import threading
 import time
 from datetime import datetime
@@ -210,194 +214,238 @@ class CityCodeMapper:
         "信阳": 166, "xinyang": 166,
         "周口": 167, "zhoukou": 167,
         "驻马店": 168, "zhumadian": 168,
+        "济源": 169, "jiyuan": 169,
         
         # Hubei Province
-        "黄石": 169, "huangshi": 169,
-        "十堰": 170, "shiyan": 170,
+        "荆州": 170, "jingzhou": 170,
         "宜昌": 171, "yichang": 171,
         "襄阳": 172, "xiangyang": 172,
-        "鄂州": 173, "ezhou": 173,
+        "十堰": 173, "shiyan": 173,
         "荆门": 174, "jingmen": 174,
-        "孝感": 175, "xiaogan": 175,
-        "荆州": 176, "jingzhou": 176,
+        "鄂州": 175, "ezhou": 175,
+        "孝感": 176, "xiaogan": 176,
         "黄冈": 177, "huanggang": 177,
         "咸宁": 178, "xianning": 178,
         "随州": 179, "suizhou": 179,
         "恩施": 180, "enshi": 180,
+        "黄石": 181, "huangshi": 181,
         
         # Hunan Province
-        "长沙": 14, "changsha": 14,
-        "株洲": 181, "zhuzhou": 181,
-        "湘潭": 182, "xiangtan": 182,
-        "衡阳": 183, "hengyang": 183,
-        "邵阳": 184, "shaoyang": 184,
-        "岳阳": 185, "yueyang": 185,
-        "常德": 186, "changde": 186,
-        "张家界": 187, "zhangjiajie": 187,
-        "益阳": 188, "yiyang": 188,
-        "郴州": 189, "chenzhou": 189,
-        "永州": 190, "yongzhou": 190,
-        "怀化": 191, "huaihua": 191,
-        "娄底": 192, "loudi": 192,
+        "株洲": 182, "zhuzhou": 182,
+        "湘潭": 183, "xiangtan": 183,
+        "衡阳": 184, "hengyang": 184,
+        "邵阳": 185, "shaoyang": 185,
+        "岳阳": 186, "yueyang": 186,
+        "常德": 187, "changde": 187,
+        "张家界": 188, "zhangjiajie": 188,
+        "益阳": 189, "yiyang": 189,
+        "郴州": 190, "chenzhou": 190,
+        "永州": 191, "yongzhou": 191,
+        "怀化": 192, "huaihua": 192,
+        "娄底": 193, "loudi": 193,
+        "湘西": 194, "xiangxi": 194,
         
         # Guangdong Province
-        "广州": 3, "guangzhou": 3,
-        "深圳": 4, "shenzhen": 4,
-        "韶关": 193, "shaoguan": 193,
-        "珠海": 194, "zhuhai": 194,
-        "汕头": 195, "shantou": 195,
-        "佛山": 196, "foshan": 196,
-        "江门": 197, "jiangmen": 197,
-        "湛江": 198, "zhanjiang": 198,
-        "茂名": 199, "maoming": 199,
+        "珠海": 195, "zhuhai": 195,
+        "汕头": 196, "shantou": 196,
+        "佛山": 197, "foshan": 197,
+        "韶关": 198, "shaoguan": 198,
+        "湛江": 199, "zhanjiang": 199,
         "肇庆": 200, "zhaoqing": 200,
-        "惠州": 201, "huizhou": 201,
-        "梅州": 202, "meizhou": 202,
-        "汕尾": 203, "shanwei": 203,
-        "河源": 204, "heyuan": 204,
-        "阳江": 205, "yangjiang": 205,
-        "清远": 206, "qingyuan": 206,
-        "东莞": 207, "dongguan": 207,
-        "中山": 208, "zhongshan": 208,
-        "潮州": 209, "chaozhou": 209,
-        "揭阳": 210, "jieyang": 210,
-        "云浮": 211, "yunfu": 211,
+        "江门": 201, "jiangmen": 201,
+        "茂名": 202, "maoming": 202,
+        "惠州": 203, "huizhou": 203,
+        "梅州": 204, "meizhou": 204,
+        "汕尾": 205, "shanwei": 205,
+        "河源": 206, "heyuan": 206,
+        "阳江": 207, "yangjiang": 207,
+        "清远": 208, "qingyuan": 208,
+        "东莞": 209, "dongguan": 209,
+        "中山": 210, "zhongshan": 210,
+        "潮州": 211, "chaozhou": 211,
+        "揭阳": 212, "jieyang": 212,
+        "云浮": 213, "yunfu": 213,
         
         # Guangxi Zhuang Autonomous Region
-        "南宁": 212, "nanning": 212,
-        "柳州": 213, "liuzhou": 213,
-        "桂林": 214, "guilin": 214,
-        "梧州": 215, "wuzhou": 215,
-        "北海": 216, "beihai": 216,
-        "防城港": 217, "fangchenggang": 217,
-        "钦州": 218, "qinzhou": 218,
-        "贵港": 219, "guigang": 219,
-        "玉林": 220, "yulin": 220,
-        "百色": 221, "baise": 221,
-        "贺州": 222, "hezhou": 222,
-        "河池": 223, "hechi": 223,
-        "来宾": 224, "laibin": 224,
-        "崇左": 225, "chongzuo": 225,
+        "南宁": 214, "nanning": 214,
+        "柳州": 215, "liuzhou": 215,
+        "桂林": 216, "guilin": 216,
+        "梧州": 217, "wuzhou": 217,
+        "北海": 218, "beihai": 218,
+        "防城港": 219, "fangchenggang": 219,
+        "钦州": 220, "qinzhou": 220,
+        "贵港": 221, "guigang": 221,
+        "玉林": 222, "yulin": 222,
+        "百色": 223, "baise": 223,
+        "贺州": 224, "hezhou": 224,
+        "河池": 225, "hechi": 225,
+        "来宾": 226, "laibin": 226,
+        "崇左": 227, "chongzuo": 227,
         
         # Hainan Province
-        "海口": 226, "haikou": 226,
-        "三亚": 227, "sanya": 227,
-        "三沙": 228, "sansha": 228,
-        "儋州": 229, "danzhou": 229,
+        "海口": 228, "haikou": 228,
+        "三亚": 229, "sanya": 229,
+        "三沙": 230, "sansha": 230,
+        "儋州": 231, "danzhou": 231,
         
         # Sichuan Province
-        "成都": 5, "chengdu": 5,
-        "自贡": 230, "zigong": 230,
-        "攀枝花": 231, "panzhihua": 231,
-        "泸州": 232, "luzhou": 232,
-        "德阳": 233, "deyang": 233,
-        "绵阳": 234, "mianyang": 234,
-        "广元": 235, "guangyuan": 235,
-        "遂宁": 236, "suining": 236,
-        "内江": 237, "neijiang": 237,
-        "乐山": 238, "leshan": 238,
-        "南充": 239, "nanchong": 239,
-        "眉山": 240, "meishan": 240,
-        "宜宾": 241, "yibin": 241,
-        "广安": 242, "guangan": 242,
-        "达州": 243, "dazhou": 243,
-        "雅安": 244, "yaan": 244,
-        "巴中": 245, "bazhong": 245,
-        "资阳": 246, "ziyang": 246,
+        "绵阳": 232, "mianyang": 232,
+        "自贡": 233, "zigong": 233,
+        "攀枝花": 234, "panzhihua": 234,
+        "泸州": 235, "luzhou": 235,
+        "德阳": 236, "deyang": 236,
+        "广元": 237, "guangyuan": 237,
+        "遂宁": 238, "suining": 238,
+        "内江": 239, "neijiang": 239,
+        "乐山": 240, "leshan": 240,
+        "南充": 241, "nanchong": 241,
+        "眉山": 242, "meishan": 242,
+        "宜宾": 243, "yibin": 243,
+        "广安": 244, "guangan": 244,
+        "达州": 245, "dazhou": 245,
+        "雅安": 246, "yaan": 246,
+        "巴中": 247, "bazhong": 247,
+        "资阳": 248, "ziyang": 248,
+        "阿坝": 249, "aba": 249,
+        "甘孜": 250, "ganzi": 250,
+        "凉山": 251, "liangshan": 251,
         
         # Guizhou Province
-        "贵阳": 247, "guiyang": 247,
-        "六盘水": 248, "liupanshui": 248,
-        "遵义": 249, "zunyi": 249,
-        "安顺": 250, "anshun": 250,
-        "毕节": 251, "bijie": 251,
-        "铜仁": 252, "tongren": 252,
+        "贵阳": 252, "guiyang": 252,
+        "六盘水": 253, "liupanshui": 253,
+        "遵义": 254, "zunyi": 254,
+        "安顺": 255, "anshun": 255,
+        "毕节": 256, "bijie": 256,
+        "铜仁": 257, "tongren": 257,
+        "黔西南": 258, "qianxinan": 258,
+        "黔东南": 259, "qiandongnan": 259,
+        "黔南": 260, "qiannan": 260,
         
         # Yunnan Province
-        "昆明": 253, "kunming": 253,
-        "曲靖": 254, "qujing": 254,
-        "玉溪": 255, "yuxi": 255,
-        "保山": 256, "baoshan": 256,
-        "昭通": 257, "zhaotong": 257,
-        "丽江": 258, "lijiang": 258,
-        "普洱": 259, "puer": 259,
-        "临沧": 260, "lincang": 260,
+        "昆明": 261, "kunming": 261,
+        "曲靖": 262, "qujing": 262,
+        "玉溪": 263, "yuxi": 263,
+        "保山": 264, "baoshan": 264,
+        "昭通": 265, "zhaotong": 265,
+        "丽江": 266, "lijiang": 266,
+        "普洱": 267, "puer": 267,
+        "临沧": 268, "lincang": 268,
+        "楚雄": 269, "chuxiong": 269,
+        "红河": 270, "honghe": 270,
+        "文山": 271, "wenshan": 271,
+        "西双版纳": 272, "xishuangbanna": 272,
+        "大理": 273, "dali": 273,
+        "德宏": 274, "dehong": 274,
+        "怒江": 275, "nujiang": 275,
+        "迪庆": 276, "diqing": 276,
         
-        # Tibet (Xizang) Autonomous Region
-        "拉萨": 261, "lhasa": 261,
-        "日喀则": 262, "rikaze": 262,
-        "昌都": 263, "changdu": 263,
-        "林芝": 264, "linzhi": 264,
-        "山南": 265, "shannan": 265,
-        "那曲": 266, "naqu": 266,
+        # Tibet Autonomous Region
+        "拉萨": 277, "lasa": 277,
+        "日喀则": 278, "rikaze": 278,
+        "昌都": 279, "changdu": 279,
+        "林芝": 280, "linzhi": 280,
+        "山南": 281, "shannan": 281,
+        "那曲": 282, "naqu": 282,
+        "阿里": 283, "ali": 283,
         
         # Shaanxi Province
-        "西安": 8, "xian": 8,
-        "铜川": 267, "tongchuan": 267,
-        "宝鸡": 268, "baoji": 268,
-        "咸阳": 269, "xianyang": 269,
-        "渭南": 270, "weinan": 270,
-        "延安": 271, "yanan": 271,
-        "汉中": 272, "hanzhong": 272,
-        "榆林": 273, "yulin_sx": 273,
-        "安康": 274, "ankang": 274,
-        "商洛": 275, "shangluo": 275,
+        "咸阳": 284, "xianyang": 284,
+        "铜川": 285, "tongchuan": 285,
+        "宝鸡": 286, "baoji": 286,
+        "延安": 287, "yanan": 287,
+        "汉中": 288, "hanzhong": 288,
+        "榆林": 289, "yulin_sx": 289,
+        "安康": 290, "ankang": 290,
+        "商洛": 291, "shangluo": 291,
         
         # Gansu Province
-        "兰州": 276, "lanzhou": 276,
-        "嘉峪关": 277, "jiayuguan": 277,
-        "金昌": 278, "jinchang": 278,
-        "白银": 279, "baiyin": 279,
-        "天水": 280, "tianshui": 280,
-        "武威": 281, "wuwei": 281,
-        "张掖": 282, "zhangye": 282,
-        "平凉": 283, "pingliang": 283,
-        "酒泉": 284, "jiuquan": 284,
-        "庆阳": 285, "qingyang": 285,
-        "定西": 286, "dingxi": 286,
-        "陇南": 287, "longnan": 287,
+        "兰州": 292, "lanzhou": 292,
+        "嘉峪关": 293, "jiayuguan": 293,
+        "金昌": 294, "jinchang": 294,
+        "白银": 295, "baiyin": 295,
+        "天水": 296, "tianshui": 296,
+        "武威": 297, "wuwei": 297,
+        "张掖": 298, "zhangye": 298,
+        "平凉": 299, "pingliang": 299,
+        "酒泉": 300, "jiuquan": 300,
+        "庆阳": 301, "qingyang": 301,
+        "定西": 302, "dingxi": 302,
+        "陇南": 303, "longnan": 303,
+        "临夏": 304, "linxia": 304,
+        "甘南": 305, "gannan": 305,
         
         # Qinghai Province
-        "西宁": 288, "xining": 288,
-        "海东": 289, "haidong": 289,
+        "西宁": 306, "xining": 306,
+        "海东": 307, "haidong": 307,
+        "海北": 308, "haibei": 308,
+        "黄南": 309, "huangnan": 309,
+        "海南": 310, "hainan_qh": 310,
+        "果洛": 311, "guoluo": 311,
+        "玉树": 312, "yushu": 312,
+        "海西": 313, "haixi": 313,
         
         # Ningxia Hui Autonomous Region
-        "银川": 290, "yinchuan": 290,
-        "石嘴山": 291, "shizuishan": 291,
-        "吴忠": 292, "wuzhong": 292,
-        "固原": 293, "guyuan": 293,
-        "中卫": 294, "zhongwei": 294,
+        "银川": 314, "yinchuan": 314,
+        "石嘴山": 315, "shizuishan": 315,
+        "吴忠": 316, "wuzhong": 316,
+        "固原": 317, "guyuan": 317,
+        "中卫": 318, "zhongwei": 318,
         
-        # Xinjiang Uighur Autonomous Region
-        "乌鲁木齐": 295, "urumqi": 295,
-        "克拉玛依": 296, "kelamayi": 296,
-        "吐鲁番": 297, "tulufan": 297,
-        "哈密": 298, "hami": 298,
+        # Xinjiang Uygur Autonomous Region
+        "乌鲁木齐": 319, "urumqi": 319,
+        "克拉玛依": 320, "karamay": 320,
+        "吐鲁番": 321, "turpan": 321,
+        "哈密": 322, "hami": 322,
+        "昌吉": 323, "changji": 323,
+        "博尔塔拉": 324, "bortala": 324,
+        "巴音郭楞": 325, "bayingolin": 325,
+        "阿克苏": 326, "aksu": 326,
+        "克孜勒苏": 327, "kizilsu": 327,
+        "喀什": 328, "kashgar": 328,
+        "和田": 329, "hotan": 329,
+        "伊犁": 330, "ili": 330,
+        "塔城": 331, "tacheng": 331,
+        "阿勒泰": 332, "altay": 332,
         
-        # Hong Kong SAR
-        "香港": 299, "hongkong": 299, "HongKong": 299,
-        
-        # Macau SAR
-        "澳门": 300, "macau": 300, "Macau": 300,
-        
-        # Taiwan (for reference)
-        "台北": 301, "taipei": 301, "Taipei": 301,
+        # Special Administrative Regions
+        "香港": 333, "hongkong": 333,
+        "澳门": 334, "macau": 334,
+        "台北": 335, "taipei": 335,
+        "高雄": 336, "kaohsiung": 336,
+        "台中": 337, "taichung": 337,
+        "台南": 338, "tainan": 338,
+        "新竹": 339, "hsinchu": 339,
+        "嘉义": 340, "chiayi": 340,
     }
     
     @classmethod
     def get_city_code(cls, city_name: str) -> int:
-        return cls.CITY_MAPPING.get(city_name, 999)
+        if not city_name:
+            return 999
+        
+        city_name_clean = city_name.strip()
+        
+        if city_name_clean in cls.CITY_MAPPING:
+            return cls.CITY_MAPPING[city_name_clean]
+        
+        city_name_lower = city_name_clean.lower()
+        if city_name_lower in cls.CITY_MAPPING:
+            return cls.CITY_MAPPING[city_name_lower]
+        
+        for key in cls.CITY_MAPPING:
+            if city_name_clean in key or key in city_name_clean:
+                return cls.CITY_MAPPING[key]
+        
+        return 999
+
 
 class FinshDataSender:
-    def __init__(self, 
-                 serial_assistant=None, 
-                 weather_api=None, 
-                 stock_api=None, 
-                 hardware_monitor=None):
+    """Finsh协议数据发送器 - 支持延迟发送"""
+    
+    def __init__(self, serial_assistant, hardware_monitor=None, weather_api=None):
         self.serial_assistant = serial_assistant
-        self.weather_api = weather_api
-        self.stock_api = stock_api
         self.hardware_monitor = hardware_monitor
+        self.weather_api = weather_api
         
         self.enabled = False
         self.send_time_data = True
@@ -408,6 +456,13 @@ class FinshDataSender:
             DataCategory.TIME: 1.0,
             DataCategory.API: 300.0,
             DataCategory.PERFORMANCE: 1.0
+        }
+        
+        # 初始延迟配置（秒）
+        self.initial_delays = {
+            DataCategory.TIME: 0.0,        # 时间数据立即发送
+            DataCategory.API: 5.0,         # 天气数据延迟5秒发送
+            DataCategory.PERFORMANCE: 0.0  # 性能数据立即发送
         }
         
         self.min_command_interval = 10
@@ -426,13 +481,30 @@ class FinshDataSender:
             'errors': 0,
             'last_send_time': None
         }
+    
+    def set_api_initial_delay(self, delay_seconds: float):
+        """设置天气数据的初始发送延迟
+        
+        Args:
+            delay_seconds: 延迟秒数
+        """
+        self.initial_delays[DataCategory.API] = max(0.0, delay_seconds)
+    
+    def set_initial_delay(self, category: DataCategory, delay_seconds: float):
+        """设置指定类型数据的初始发送延迟
+        
+        Args:
+            category: 数据类型
+            delay_seconds: 延迟秒数
+        """
+        self.initial_delays[category] = max(0.0, delay_seconds)
         
     def start(self):
         if self.enabled:
-            return True  # 已经启动，返回True
+            return True
             
         if not self.serial_assistant or not self.serial_assistant.is_connected:
-            return False  # 串口未连接，返回False
+            return False
             
         self.enabled = True
         self.stop_event.clear()
@@ -447,10 +519,10 @@ class FinshDataSender:
             if self.send_performance_data:
                 self._start_sender_thread(DataCategory.PERFORMANCE)
                 
-            return True  # 启动成功
+            return True
         except Exception:
             self.enabled = False
-            return False  # 启动失败
+            return False
             
     def stop(self):
         if not self.enabled:
@@ -480,9 +552,25 @@ class FinshDataSender:
         thread.start()
         
     def _sender_worker(self, category: DataCategory):
+        """发送工作线程 - 支持初始延迟"""
         interval = self.intervals[category]
         data_provider = self.data_providers[category]
+        initial_delay = self.initial_delays.get(category, 0.0)
         
+        # 初始延迟（可被stop_event中断）
+        if initial_delay > 0:
+            # 分段等待，以便能够响应stop信号
+            delay_remaining = initial_delay
+            while delay_remaining > 0 and not self.stop_event.is_set():
+                sleep_time = min(0.1, delay_remaining)
+                time.sleep(sleep_time)
+                delay_remaining -= sleep_time
+            
+            # 如果在延迟期间被停止，直接退出
+            if self.stop_event.is_set():
+                return
+        
+        # 首次发送
         try:
             data_dict = data_provider()
             self._send_data_dict(data_dict)
@@ -491,6 +579,7 @@ class FinshDataSender:
         
         last_send = time.time()
         
+        # 周期性发送
         while not self.stop_event.is_set():
             try:
                 current_time = time.time()
@@ -610,18 +699,6 @@ class FinshDataSender:
             except Exception:
                 pass
                 
-        if self.stock_api:
-            try:
-                stock_data = self.stock_api.get_stock_data()
-                if stock_data.get('success', False):
-                    data.update({
-                        'stock_name': stock_data.get('name', ''),
-                        'stock_price': float(stock_data.get('price', 0)),
-                        'stock_change': float(stock_data.get('change', 0))
-                    })
-            except Exception:
-                pass
-                
         return data
         
     def _get_performance_data(self) -> Dict[str, Any]:
@@ -681,9 +758,6 @@ class FinshDataSender:
             'sys_set forecast_day2_temp_min 16',
             'sys_set forecast_day2_wind_dir "东北风"',
             'sys_set forecast_day2_wind_scale "1-2"',
-            'sys_set stock_name "上证指数"',
-            'sys_set stock_price 3245.67',
-            'sys_set stock_change -12.34',
             'sys_set cpu 45.2',
             'sys_set cpu_temp 68.5',
             'sys_set mem 72.1',
@@ -716,6 +790,7 @@ class FinshDataSender:
             'send_api_data': self.send_api_data,
             'send_performance_data': self.send_performance_data,
             'intervals': dict(self.intervals),
+            'initial_delays': dict(self.initial_delays),
             'min_command_interval': self.min_command_interval,
             'stats': dict(self.stats),
             'active_threads': len([t for t in self.sender_threads.values() if t and t.is_alive()])
@@ -730,6 +805,7 @@ class FinshDataSender:
             'time_interval': self.intervals[DataCategory.TIME],
             'api_interval': self.intervals[DataCategory.API],
             'performance_interval': self.intervals[DataCategory.PERFORMANCE],
+            'api_initial_delay': self.initial_delays[DataCategory.API],
             'min_command_interval': self.min_command_interval
         }
         

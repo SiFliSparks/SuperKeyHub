@@ -1,40 +1,102 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os, sys, time, asyncio, ctypes, math, winreg
+import os, sys, time, asyncio, math
+import argparse
 import flet as ft
-import sys
-import os
+import platform
+
+# ==============================================================================
+# 命令行参数解析
+# ==============================================================================
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description='SuperKey Hardware Monitor')
+    parser.add_argument('--minimized', '-m', action='store_true',
+                        help='启动时最小化到系统托盘（静默启动）')
+    # 忽略 flet 可能传递的其他参数
+    args, _ = parser.parse_known_args()
+    return args
+
+# 全局启动参数
+STARTUP_ARGS = parse_args()
+START_MINIMIZED = STARTUP_ARGS.minimized
 
 from hw_monitor import HardwareMonitor, bytes2human, pct_str, mhz_str, temp_str, watt_str
 from weather_api import QWeatherAPI as WeatherAPI
-from stock_api import StockAPI
-from serial_assistant import SerialAssistant, DataFormat
+from serial_assistant import SerialAssistant
 from finsh_data_sender import FinshDataSender
+from config_manager import get_config_manager
+from system_tray import SystemTray, AutoStartManager, is_tray_available
+from custom_key_manager import (
+    get_custom_key_manager, PRESET_SHORTCUTS, 
+    get_all_key_options, get_modifier_options,
+    KEY_NAME_MAP, Modifier
+)
+
+# ==============================================================================
+# 平台检测
+# ==============================================================================
+SYSTEM = platform.system().lower()
+IS_WINDOWS = SYSTEM == 'windows'
+IS_MACOS = SYSTEM == 'darwin'
+IS_LINUX = SYSTEM == 'linux'
+
+# 条件导入 - 仅Windows需要
+if IS_WINDOWS:
+    import ctypes
+    import winreg
 
 # ==============================================================================
 # Version Configuration
 # ==============================================================================
-APP_VERSION = "1.5.0"
-FIRMWARE_COMPAT = "1.0"
+APP_VERSION = "1.6.1"
+FIRMWARE_COMPAT = "1.1.2"
 APP_NAME = "SuperKey"
 # ==============================================================================
 
-def detect_windows_theme() -> str:
-    if os.name != "nt":
-        return "dark"
-    
-    try:
-        registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 
-                                     r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
-        value, _ = winreg.QueryValueEx(registry_key, "AppsUseLightTheme")
-        winreg.CloseKey(registry_key)
-        return "light" if value else "dark"
-    except Exception:
-        return "dark"
+def detect_system_theme() -> str:
+    """跨平台检测系统主题"""
+    if IS_WINDOWS:
+        try:
+            registry_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, 
+                                         r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            value, _ = winreg.QueryValueEx(registry_key, "AppsUseLightTheme")
+            winreg.CloseKey(registry_key)
+            return "light" if value else "dark"
+        except Exception:
+            return "dark"
+    elif IS_MACOS:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['defaults', 'read', '-g', 'AppleInterfaceStyle'],
+                capture_output=True, text=True
+            )
+            return "dark" if "Dark" in result.stdout else "light"
+        except Exception:
+            return "light"
+    elif IS_LINUX:
+        # Linux: 尝试检测GTK主题或使用环境变量
+        try:
+            gtk_theme = os.environ.get('GTK_THEME', '').lower()
+            if 'dark' in gtk_theme:
+                return "dark"
+            # 尝试gsettings
+            import subprocess
+            result = subprocess.run(
+                ['gsettings', 'get', 'org.gnome.desktop.interface', 'gtk-theme'],
+                capture_output=True, text=True
+            )
+            if 'dark' in result.stdout.lower():
+                return "dark"
+        except Exception:
+            pass
+        return "dark"  # Linux默认暗色
+    return "dark"
 
 class ThemeColors:
     def __init__(self):
-        self.current_theme = detect_windows_theme()
+        self.current_theme = detect_system_theme()
         self.colors = self._get_colors()
     
     def _get_colors(self):
@@ -86,7 +148,7 @@ class ThemeColors:
             }
     
     def refresh_theme(self):
-        new_theme = detect_windows_theme()
+        new_theme = detect_system_theme()
         if new_theme != self.current_theme:
             self.current_theme = new_theme
             self.colors = self._get_colors()
@@ -116,16 +178,25 @@ def color_by_load(p, theme: ThemeColors):
     else:
         return theme.get("BAD")
 
+# ==============================================================================
+# Windows 特定的窗口效果函数
+# ==============================================================================
 def _find_hwnd_by_title(title: str, retry=20, delay=0.2):
-    if os.name != "nt": return 0
+    """Windows: 通过标题查找窗口句柄"""
+    if not IS_WINDOWS:
+        return 0
     user32 = ctypes.windll.user32
     for _ in range(retry):
         hwnd = user32.FindWindowW(None, title)
-        if hwnd: return hwnd
+        if hwnd:
+            return hwnd
         time.sleep(delay)
     return 0
 
 def enable_mica(hwnd: int, kind: int = 2) -> bool:
+    """Windows: 启用Mica效果"""
+    if not IS_WINDOWS:
+        return False
     try:
         dwmapi = ctypes.windll.dwmapi
         DWMWA_SYSTEMBACKDROP_TYPE = 38
@@ -137,6 +208,9 @@ def enable_mica(hwnd: int, kind: int = 2) -> bool:
         return False
 
 def enable_acrylic(hwnd: int, is_light_theme: bool = False) -> bool:
+    """Windows: 启用Acrylic效果"""
+    if not IS_WINDOWS:
+        return False
     try:
         class ACCENTPOLICY(ctypes.Structure):
             _fields_ = [("AccentState", ctypes.c_int),
@@ -164,15 +238,57 @@ def enable_acrylic(hwnd: int, is_light_theme: bool = False) -> bool:
         return False
 
 def apply_backdrop_for_page(page: ft.Page, theme: ThemeColors, prefer_mica=True):
-    if os.name != "nt": return
+    """Windows: 应用窗口背景效果（仅Windows有效）"""
+    if not IS_WINDOWS:
+        return
     hwnd = _find_hwnd_by_title(page.title, retry=20, delay=0.2)
-    if not hwnd: return
+    if not hwnd:
+        return
     ok = False
     if prefer_mica:
         ok = enable_mica(hwnd, 2) or enable_mica(hwnd, 3)
     if not ok:
         enable_acrylic(hwnd, theme.current_theme == "light")
 
+# ==============================================================================
+# 获取平台特定的图标路径
+# ==============================================================================
+def get_resource_path(relative_path: str) -> str:
+    """获取资源文件的绝对路径，支持 PyInstaller 打包环境"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后，资源在 _MEIPASS 目录中
+        base_path = sys._MEIPASS
+    else:
+        # 开发环境，使用脚本所在目录
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
+
+def get_icon_path():
+    """根据平台返回合适的图标路径"""
+    if IS_WINDOWS:
+        candidates = ["assets/app.ico", "app.ico"]
+    elif IS_MACOS:
+        candidates = ["assets/app.icns", "app.icns", "assets/app.png", "app.png"]
+    else:
+        candidates = ["assets/app.png", "app.png"]
+    
+    # 首先尝试打包环境路径
+    for path in candidates:
+        resource_path = get_resource_path(path)
+        if os.path.exists(resource_path):
+            return resource_path
+    
+    # 回退到相对路径（开发环境兼容）
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    
+    return None
+
+# ==============================================================================
+# 导航项组件
+# ==============================================================================
 class NavigationItem:
     def __init__(self, icon: str, title: str, view_name: str, theme: ThemeColors, 
                  on_click_handler, icon_size: int = 24, is_separator: bool = False):
@@ -252,18 +368,43 @@ class NavigationItem:
         else:
             self.divider.color = theme.get("DIVIDER")
 
+# ==============================================================================
+# 主应用
+# ==============================================================================
 async def main(page: ft.Page):
-    page.window_icon = "assets/app.ico"
+    # 设置窗口图标（跨平台）
+    icon_path = get_icon_path()
+    if icon_path:
+        page.window_icon = icon_path
+    
     theme = ThemeColors()
+    
+    # 初始窗口设置
     page.window_width = 100
     page.window_height = 100
     page.update()
     
-    import time
     time.sleep(0.1)   
 
-    page.window.title_bar_hidden = True
-    page.window.frameless = False
+    # 跨平台窗口配置
+    if IS_WINDOWS:
+        # Windows: 使用自定义标题栏
+        page.window.title_bar_hidden = True
+        page.window.frameless = False
+        page.window.bgcolor = "#00000000"
+        page.bgcolor = "#00000000"
+    elif IS_MACOS:
+        # macOS: 使用原生标题栏但自定义样式
+        page.window.title_bar_hidden = False
+        page.window.title_bar_buttons_hidden = False
+        page.window.frameless = False
+        page.bgcolor = ft.colors.TRANSPARENT
+    else:
+        # Linux: 使用系统默认样式
+        page.window.title_bar_hidden = False
+        page.window.frameless = False
+        page.bgcolor = ft.colors.TRANSPARENT
+    
     page.window.resizable = True
     page.window.maximizable = True
     page.window.minimizable = True
@@ -273,9 +414,7 @@ async def main(page: ft.Page):
     page.window.min_width = 800
     page.window.min_height = 600
     
-    page.window.bgcolor = "#00000000"
     page.window.shadow = True
-    page.bgcolor = "#00000000"
     page.padding = 0
     page.spacing = 0
     page.title = f"Build v{APP_VERSION} - {APP_NAME}"
@@ -284,16 +423,94 @@ async def main(page: ft.Page):
     page.scroll = None
 
     hw_monitor = HardwareMonitor()
-    weather_api = WeatherAPI()
-    stock_api = StockAPI(default_symbol="1010")
+    config_mgr = get_config_manager()
+    weather_cfg = config_mgr.get_weather_config()
+    weather_api = WeatherAPI(
+        api_key=weather_cfg.get('api_key', ''),
+        default_city=weather_cfg.get('default_city', '北京'),
+        api_host=weather_cfg.get('api_host', ''),
+        use_jwt=weather_cfg.get('use_jwt', False)
+    )
     serial_assistant = SerialAssistant()
     
     finsh_sender = FinshDataSender(
         serial_assistant=serial_assistant,
         weather_api=weather_api, 
-        stock_api=stock_api,
         hardware_monitor=hw_monitor
     )
+
+    # ==================== 系统托盘初始化 ====================
+    system_tray = None
+    app_state = {"force_quit": False}  # 标记是否强制退出
+    
+    def show_window():
+        """显示窗口"""
+        page.window.visible = True
+        page.window.focused = True
+        try:
+            page.update()
+        except:
+            pass
+    
+    def cleanup_and_exit():
+        """清理资源"""
+        try:
+            if finsh_sender.enabled:
+                finsh_sender.stop()
+            if serial_assistant.is_connected:
+                serial_assistant.disconnect()
+        except:
+            pass
+        if system_tray:
+            system_tray.stop()
+    
+    def quit_app():
+        """完全退出应用"""
+        app_state["force_quit"] = True
+        cleanup_and_exit()
+        # 使用 Flet 正常关闭窗口，让它有机会清理临时目录
+        page.window.destroy()
+    
+    def on_window_event(e):
+        """处理窗口事件"""
+        if e.data == "close":
+            # 如果是强制退出，不做任何处理（让窗口正常关闭）
+            if app_state["force_quit"]:
+                return
+            
+            # 如果托盘可用且设置了最小化到托盘
+            if system_tray and is_tray_available() and config_mgr.should_minimize_to_tray():
+                page.window.visible = False
+                page.update()
+                if IS_MACOS:
+                    system_tray.show_notification(APP_NAME, "App minimized to system tray")
+                else:
+                    system_tray.show_notification(APP_NAME, "程序已最小化到系统托盘")
+            else:
+                # 没有托盘或不最小化，直接退出
+                quit_app()
+    
+    # 设置窗口事件处理（处理系统关闭按钮、Alt+F4等）
+    page.window.prevent_close = True
+    page.window.on_event = on_window_event
+    
+    # 初始化系统托盘
+    if is_tray_available():
+        tray_icon_path = get_icon_path()
+        
+        system_tray = SystemTray(
+            app_name=f"{APP_NAME} v{APP_VERSION}",
+            icon_path=tray_icon_path,
+            on_show=show_window,
+            on_quit=quit_app
+        )
+        system_tray.start()
+    
+    # ==================== 静默启动支持 ====================
+    # 如果使用 --minimized 参数启动，则隐藏窗口到托盘
+    if START_MINIMIZED and system_tray and is_tray_available():
+        page.window.visible = False
+        page.update()
 
     sidebar_expanded = {"value": False}
 
@@ -306,13 +523,19 @@ async def main(page: ft.Page):
         page.update()
 
     def do_close(e):
-        try:
-            if finsh_sender.enabled:
-                finsh_sender.stop()
-            page.window.close()
-        except Exception:
-            os._exit(0)
+        """关闭按钮 - 触发窗口关闭事件"""
+        # 模拟窗口关闭，让 on_window_event 统一处理
+        if system_tray and is_tray_available() and config_mgr.should_minimize_to_tray():
+            page.window.visible = False
+            page.update()
+            if IS_MACOS:
+                system_tray.show_notification(APP_NAME, "App minimized to system tray")
+            else:
+                system_tray.show_notification(APP_NAME, "程序已最小化到系统托盘")
+        else:
+            quit_app()
 
+    # 标题栏按钮（仅Windows显示自定义按钮）
     title_buttons = ft.Row(
         [
             ft.IconButton(icon="remove", icon_color=theme.get("TEXT_SECONDARY"), 
@@ -323,6 +546,7 @@ async def main(page: ft.Page):
                          tooltip="关闭", on_click=do_close),
         ],
         spacing=0,
+        visible=IS_WINDOWS,  # 仅Windows显示
     )
     
     logo_img = ft.Image(src="logo_484x74.png", height=28, width=180, fit=ft.ImageFit.CONTAIN)
@@ -334,10 +558,23 @@ async def main(page: ft.Page):
         on_click=lambda e: toggle_sidebar()
     )
     
+    # LHM状态指示器（仅Windows显示）
+    lhm_state = ft.Text(
+        "",
+        size=10,
+        color=theme.get("TEXT_TERTIARY"),
+        visible=IS_WINDOWS
+    )
+    
+    # 标题行布局
     title_row = ft.Container(
         content=ft.Row([
             hamburger_btn, 
-            ft.Row([logo_img, ft.Text(f"{APP_NAME} v{APP_VERSION}", color=theme.get("TEXT_SECONDARY"), size=14)], spacing=10),
+            ft.Row([
+                logo_img, 
+                ft.Text(f"{APP_NAME} v{APP_VERSION}", color=theme.get("TEXT_SECONDARY"), size=14),
+                lhm_state
+            ], spacing=10),
             ft.Container(expand=True), 
             title_buttons
         ], 
@@ -350,10 +587,14 @@ async def main(page: ft.Page):
         bgcolor="transparent"
     )
     
-    title_bar = ft.WindowDragArea(
-        title_row,
-        maximizable=True,
-    )
+    # Windows使用拖拽区域，其他平台直接使用容器
+    if IS_WINDOWS:
+        title_bar = ft.WindowDragArea(
+            title_row,
+            maximizable=True,
+        )
+    else:
+        title_bar = title_row
 
     content_host = ft.Container(expand=True, bgcolor="transparent")
     current_view = {"name": "performance"}
@@ -433,24 +674,7 @@ async def main(page: ft.Page):
         height=CARD_H_ROW2, padding=12, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
     ))
 
-    performance_view = ft.Container(
-        content=ft.Column(
-            [
-                ft.ResponsiveRow([
-                    ft.Column([cpu_card], col={"xs":12, "md":6}),
-                    ft.Column([gpu_card], col={"xs":12, "md":6}),
-                ], columns=12),
-                ft.ResponsiveRow([
-                    ft.Column([mem_card], col={"xs":12, "md":3}),
-                    ft.Column([storage_card], col={"xs":12, "md":6}),
-                    ft.Column([net_card], col={"xs":12, "md":3}),
-                ], columns=12),
-            ],
-            spacing=8, expand=True, scroll=ft.ScrollMode.ADAPTIVE
-        ),
-        padding=12,
-        expand=True
-    )
+    # performance_view 将在天气组件定义后创建
     
     weather_api_key_field = ft.TextField(
         label="和风天气API密钥",
@@ -517,7 +741,12 @@ async def main(page: ft.Page):
                 use_jwt=weather_use_jwt_switch.value,
                 default_city=weather_default_city_field.value.strip()
             )
-            
+            config_mgr.set_weather_config(
+                api_key=weather_api_key_field.value.strip(),
+                api_host=weather_api_host_field.value.strip(),
+                use_jwt=weather_use_jwt_switch.value,
+                default_city=weather_default_city_field.value.strip()
+            )            
             if config_changed:
                 weather_config_status.value = "配置已保存"
                 weather_config_status.color = theme.get("GOOD")
@@ -585,10 +814,13 @@ async def main(page: ft.Page):
     weather_uv_index = ft.Text("紫外线: --", size=14, color=theme.get("TEXT_TERTIARY"))
     
     weather_update_info = ft.Column([
-        ft.Text("数据源: --", size=12, color=theme.get("TEXT_TERTIARY")),
-        ft.Text("更新: --", size=12, color=theme.get("TEXT_TERTIARY")),
-        ft.Text("观测: --", size=12, color=theme.get("TEXT_TERTIARY")),
-    ], spacing=2)
+        ft.Text("数据源: --", size=11, color=theme.get("TEXT_TERTIARY")),
+        ft.Text("更新: --", size=11, color=theme.get("TEXT_TERTIARY")),
+        ft.Text("观测: --", size=11, color=theme.get("TEXT_TERTIARY")),
+    ], spacing=0)
+    
+    # 天气自动更新状态
+    weather_state = {"last_update": time.time()}
     
     def update_weather():
         try:
@@ -629,6 +861,9 @@ async def main(page: ft.Page):
             
             update_weather_forecast(data['weather_forecast'])
             
+            # 更新天气刷新时间（手动刷新也会重置计时器）
+            weather_state["last_update"] = time.time()
+            
         except Exception as e:
             weather_current_city.value = f"当前城市: 获取失败"
             weather_temp.value = "--°C"
@@ -652,57 +887,49 @@ async def main(page: ft.Page):
     
     weather_main_card = ft.Card(ft.Container(
         content=ft.Column([
+            # 标题行
             ft.Row([
-                ft.Icon(name="wb_sunny", color=theme.get("TEXT_SECONDARY"), size=24),
-                ft.Text("实时天气", size=20, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
+                ft.Icon(name="wb_sunny", color=theme.get("TEXT_SECONDARY"), size=22),
+                ft.Text("实时天气", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
                 ft.Container(expand=True),
                 weather_current_city,
                 weather_settings_btn,
                 weather_refresh_btn
-            ], spacing=8),
+            ], spacing=6),
             
-            ft.Container(height=8),
-            
+            # 主内容区：三列平行布局
             ft.Row([
+                # 左列：温度和天气描述
                 ft.Column([
                     weather_temp,
                     weather_feels_like,
                     weather_desc,
-                ], horizontal_alignment="start", spacing=4),
+                    ft.Container(height=2),
+                    ft.Row([weather_quality, weather_comfort], spacing=12),
+                ], horizontal_alignment="start", spacing=0, expand=2),
                 
-                ft.Container(width=40),
-                
+                # 中列：详细信息（左半部分）
                 ft.Column([
-                    weather_quality,
-                    weather_comfort,
-                    ft.Container(height=20),
-                    weather_update_info
-                ], horizontal_alignment="start", spacing=4),
-            ], alignment="start"),
+                    weather_humidity,
+                    weather_pressure,
+                    weather_visibility,
+                    weather_precipitation,
+                ], spacing=4, expand=1),
+                
+                # 右列：详细信息（右半部分）+ 更新信息
+                ft.Column([
+                    weather_wind,
+                    weather_cloud,
+                    weather_dew_point,
+                    weather_uv_index,
+                    ft.Container(height=6),
+                    weather_update_info,
+                ], spacing=4, expand=1),
+                
+            ], spacing=20, vertical_alignment=ft.CrossAxisAlignment.START),
             
-            ft.Container(height=12),
-            
-            ft.Column([
-                ft.Text("详细信息", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-                ft.Container(height=8),
-                ft.Row([
-                    ft.Column([
-                        weather_humidity,
-                        weather_pressure,
-                        weather_visibility,
-                        weather_precipitation,
-                    ], spacing=8, expand=True),
-                    
-                    ft.Column([
-                        weather_wind,
-                        weather_cloud,
-                        weather_dew_point,
-                        weather_uv_index,
-                    ], spacing=8, expand=True),
-                ], spacing=20),
-            ])
-        ], spacing=8, expand=True),
-        height=480, padding=20, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=12
+        ], spacing=4),
+        height=240, padding=12, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
     ))
 
     forecast_container = ft.Column([], spacing=8)
@@ -783,112 +1010,28 @@ async def main(page: ft.Page):
             ft.Container(height=8),
             ft.Container(content=forecast_container, expand=True),
         ], spacing=8, expand=True),
-        height=280, padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
+        height=240, padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
     ))
 
-    stock_index_dropdown = ft.Dropdown(
-        options=[
-            ft.dropdown.Option("1010", text="上证指数"),
-            ft.dropdown.Option("1011", text="深证成指"),
-            ft.dropdown.Option("1012", text="沪深300"),
-            ft.dropdown.Option("1013", text="创业板指"),
-            ft.dropdown.Option("1015", text="恒生指数"),
-            ft.dropdown.Option("1111", text="道琼斯"),
-            ft.dropdown.Option("1112", text="标普500"),
-            ft.dropdown.Option("1114", text="纳斯达克"),
-        ],
-        value="1010",
-        width=150,
-        dense=True,
-        on_change=lambda e: update_stock(e.control.value)
-    )
-    
-    stock_price = ft.Text("--", size=32, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY"))
-    stock_change = ft.Text("--", size=20, color=theme.get("TEXT_TERTIARY"))
-    stock_change_pct = ft.Text("--", size=20, color=theme.get("TEXT_TERTIARY"))
-    stock_details = ft.Column([
-        ft.Text("成交量: --", size=14, color=theme.get("TEXT_TERTIARY")),
-        ft.Text("成交额: --", size=14, color=theme.get("TEXT_TERTIARY")),
-        ft.Text("数据源: --", size=12, color=theme.get("TEXT_TERTIARY")),
-        ft.Text("更新时间: --", size=12, color=theme.get("TEXT_TERTIARY")),
-    ], spacing=4)
-    
-    def update_stock(symbol=None):
-        if symbol:
-            stock_api.switch_to_index(symbol)
-        data = stock_api.get_formatted_data(force_refresh=True)
-        stock_price.value = f"{data['stock_price']:.2f}"
-        
-        change = data['stock_change']
-        change_pct = data['stock_change_percent']
-        if change >= 0:
-            color = theme.get("BAD")
-            sign = "+"
-        else:
-            color = theme.get("GOOD")
-            sign = ""
-        
-        stock_change.value = f"{sign}{change:.2f}"
-        stock_change.color = color
-        stock_change_pct.value = f"({sign}{change_pct:.2f}%)"
-        stock_change_pct.color = color
-        
-        volume = data['stock_volume']
-        turnover = data['stock_turnover']
-        if volume > 100000000:
-            vol_str = f"{volume/100000000:.2f}亿"
-        elif volume > 10000:
-            vol_str = f"{volume/10000:.2f}万"
-        else:
-            vol_str = str(volume)
-            
-        if turnover > 100000000:
-            turn_str = f"{turnover/100000000:.2f}亿"
-        elif turnover > 10000:
-            turn_str = f"{turnover/10000:.2f}万"
-        else:
-            turn_str = str(turnover)
-        
-        stock_details.controls[0].value = f"成交量: {vol_str}"
-        stock_details.controls[1].value = f"成交额: {turn_str}"
-        stock_details.controls[2].value = f"数据源: {data['stock_source']}"
-        stock_details.controls[3].value = f"更新: {data['stock_update_time']}"
-        page.update()
-    
-    stock_refresh_btn = ft.IconButton(
-        icon="refresh",
-        icon_color=theme.get("ACCENT"),
-        tooltip="刷新股票",
-        on_click=lambda e: update_stock()
-    )
-    
-    stock_card = ft.Card(ft.Container(
-        content=ft.Column([
-            ft.Row([
-                ft.Icon(name="trending_up", color=theme.get("TEXT_SECONDARY")),
-                ft.Text("股票指数", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
-                ft.Container(expand=True),
-                stock_index_dropdown,
-                stock_refresh_btn
-            ], spacing=8),
-            ft.Row([stock_price, ft.Container(width=20), stock_change, stock_change_pct], alignment="end"),
-            stock_details
-        ], spacing=12, expand=True),
-        height=320, padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
-    ))
-
-    api_view = ft.Container(
+    # 性能监控视图（包含天气信息）
+    performance_view = ft.Container(
         content=ft.Column(
             [
                 ft.ResponsiveRow([
-                    ft.Column([weather_main_card], col={"xs":12, "md":8}),
-                    ft.Column([stock_card], col={"xs":12, "md":4}),
+                    ft.Column([cpu_card], col={"xs":12, "md":6}),
+                    ft.Column([gpu_card], col={"xs":12, "md":6}),
                 ], columns=12),
                 ft.ResponsiveRow([
-                    ft.Column([weather_forecast_card], col={"xs":12, "md":12}),
+                    ft.Column([mem_card], col={"xs":12, "md":3}),
+                    ft.Column([storage_card], col={"xs":12, "md":6}),
+                    ft.Column([net_card], col={"xs":12, "md":3}),
+                ], columns=12),
+                ft.ResponsiveRow([
+                    ft.Column([weather_main_card], col={"xs":12, "md":8}),
+                    ft.Column([weather_forecast_card], col={"xs":12, "md":4}),
                 ], columns=12),
             ],
-            spacing=12, expand=True, scroll=ft.ScrollMode.ADAPTIVE
+            spacing=8, expand=True, scroll=ft.ScrollMode.ADAPTIVE
         ),
         padding=12,
         expand=True
@@ -896,62 +1039,10 @@ async def main(page: ft.Page):
     
     port_dropdown = ft.Dropdown(
         label="端口",
-        width=150,
+        width=250,
         options=[],
-        dense=True
-    )
-    
-    baudrate_dropdown = ft.Dropdown(
-        label="波特率",
-        width=140,
-        value="1000000",
-        options=[ft.dropdown.Option(str(b)) for b in serial_assistant.get_baudrate_list()] + [ft.dropdown.Option("custom", text="自定义…")],
-        dense=True
-    )
-
-    baudrate_custom = ft.TextField(
-        label="自定义",
-        width=120,
-        value="1000000",
-        visible=False,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        text_align=ft.TextAlign.CENTER,
-    )
-
-    def on_baudrate_change(v):
-        baudrate_custom.visible = (v == "custom")
-        page.update()
-
-    baudrate_dropdown.on_change = lambda e: on_baudrate_change(e.control.value)
-
-    databits_dropdown = ft.Dropdown(
-        label="数据位",
-        width=80,
-        value="8",
-        options=[ft.dropdown.Option(str(b)) for b in [5, 6, 7, 8]],
-        dense=True
-    )
-    
-    stopbits_dropdown = ft.Dropdown(
-        label="停止位",
-        width=80,
-        value="1",
-        options=[ft.dropdown.Option(str(b)) for b in ["1", "1.5", "2"]],
-        dense=True
-    )
-    
-    parity_dropdown = ft.Dropdown(
-        label="校验位",
-        width=80,
-        value="N",
-        options=[
-            ft.dropdown.Option("N", text="无"),
-            ft.dropdown.Option("E", text="偶"),
-            ft.dropdown.Option("O", text="奇"),
-            ft.dropdown.Option("M", text="标记"),
-            ft.dropdown.Option("S", text="空格")
-        ],
-        dense=True
+        dense=True,
+        on_change=lambda e: on_port_selected(e.control.value)
     )
     
     def refresh_ports(e=None):
@@ -960,7 +1051,7 @@ async def main(page: ft.Page):
             ft.dropdown.Option(p['port'], text=f"{p['port']} - {p['description']}")
             for p in ports
         ]
-        if ports:
+        if not serial_assistant.is_connected and ports:
             port_dropdown.value = ports[0]['port']
         page.update()
     
@@ -971,496 +1062,230 @@ async def main(page: ft.Page):
         on_click=refresh_ports
     )
     
-    connect_switch = ft.Switch(
-        label="连接",
-        value=False,
-        active_color=theme.get("GOOD"),
-        on_change=lambda e: toggle_connection(e.control.value)
-    )
-    
-    rts_control_switch = ft.Switch(
-        label="RTS",
-        value=False,
-        active_color=theme.get("ACCENT"),
-        disabled=True,
-        on_change=lambda e: control_rts_dtr(rts=e.control.value)
-    )
-
-    dtr_control_switch = ft.Switch(
-        label="DTR", 
-        value=False,
-        active_color=theme.get("ACCENT"),
-        disabled=True,
-        on_change=lambda e: control_rts_dtr(dtr=e.control.value)
-    )
-
-    def control_rts_dtr(rts=None, dtr=None):
-        if serial_assistant.is_connected:
-            if rts is not None:
-                serial_assistant.set_rts_dtr_control(rts=rts)
-            if dtr is not None:
-                serial_assistant.set_rts_dtr_control(dtr=dtr)
-        else:
-            if rts is not None:
-                rts_control_switch.value = False
-            if dtr is not None:
-                dtr_control_switch.value = False
-            page.update()
-
-    finsh_enable_switch = ft.Switch(
-        label="启用Finsh数据下发",
-        value=False,
-        active_color=theme.get("ACCENT"),
-        on_change=lambda e: toggle_finsh_sender(e.control.value)
-    )
-    
-    finsh_status_text = ft.Text(
-        "数据下发: 已停止",
+    port_status_text = ft.Text(
+        "未连接",
         size=12,
         color=theme.get("TEXT_TERTIARY")
     )
-
-    
-    finsh_stats_text = ft.Text(
-        "已发送: 0 字段",
-        size=12,
-        color=theme.get("TEXT_TERTIARY")
-    )
-    
-    def toggle_finsh_sender(enabled: bool):
-        if enabled:
-            if serial_assistant.is_connected:
-                success = finsh_sender.start()
-                if success:
-                    finsh_enable_switch.value = True
-                    finsh_status_text.value = "数据下发: 运行中"
-                    finsh_status_text.color = theme.get("GOOD")
-                else:
-                    finsh_enable_switch.value = False
-                    finsh_status_text.value = "数据下发: 启动失败"
-                    finsh_status_text.color = theme.get("BAD")
+    # ==================== 自动重连回调 ====================
+    def on_auto_reconnect(success: bool, port: str, is_reconnect: bool):
+        """处理自动重连事件
+        
+        Args:
+            success: 是否连接成功
+            port: 端口名称
+            is_reconnect: True表示重连，False表示启动时自动连接
+        """
+        if success:
+            port_dropdown.value = port
+            port_dropdown.disabled = True
+            
+            if is_reconnect:
+                port_status_text.value = "已重连"
             else:
-                finsh_enable_switch.value = False
-                finsh_status_text.value = "数据下发: 串口未连接"
-                finsh_status_text.color = theme.get("WARN")
+                port_status_text.value = "已连接"
+            port_status_text.color = theme.get("GOOD")
+            
+            # 重新启动数据下发
+            if not finsh_sender.enabled:
+                finsh_sender.start()
+            
+            config_mgr.set_last_port(port)
         else:
+            port_dropdown.disabled = False
+            port_status_text.value = "连接断开"
+            port_status_text.color = theme.get("WARN")
             finsh_sender.stop()
-            finsh_enable_switch.value = False
-            finsh_status_text.value = "数据下发: 已停止"
-            finsh_status_text.color = theme.get("TEXT_TERTIARY")
+        
+        try:
+            page.update()
+        except:
+            pass
+    
+    def on_connection_changed(connected: bool):
+        """处理连接状态变化"""
+        if not connected:
+            port_dropdown.disabled = False
+            if not serial_assistant._manual_disconnect:
+                port_status_text.value = "连接断开，正在重连..."
+                port_status_text.color = theme.get("WARN")
+            else:
+                port_status_text.value = "已断开"
+                port_status_text.color = theme.get("TEXT_TERTIARY")
+            finsh_sender.stop()
+        
+        try:
+            page.update()
+        except:
+            pass
+    
+    # 注册回调
+    serial_assistant.on_auto_reconnect = on_auto_reconnect
+    serial_assistant.on_connection_changed = on_connection_changed
+    def on_port_selected(port: str):
+        if not port:
+            return
+            
+        # 如果已连接，先断开
+        if serial_assistant.is_connected:
+            finsh_sender.stop()
+            serial_assistant.disconnect()
+        
+        # 配置固定参数：波特率1000000, 数据位8, 停止位1, 校验位N
+        serial_assistant.configure(
+            port=port,
+            baudrate=1000000,
+            bytesize=8,
+            stopbits=1,
+            parity='N'
+        )
+        
+        # 自动连接
+        if serial_assistant.connect():
+            port_dropdown.disabled = True
+            port_status_text.value = "已连接"
+            port_status_text.color = theme.get("GOOD")
+            
+            # 自动启动数据下发
+            finsh_sender.start()
+            config_mgr.set_last_port(port)
+        else:
+            port_status_text.value = "连接失败"
+            port_status_text.color = theme.get("BAD")
         
         page.update()
     
-    def toggle_connection(connect: bool):
-        if connect:
-            serial_assistant.configure(
-                port=port_dropdown.value,
-                baudrate=max(1, int(baudrate_custom.value) if baudrate_dropdown.value == "custom" else int(baudrate_dropdown.value)),
-                bytesize=int(databits_dropdown.value),
-                stopbits=float(stopbits_dropdown.value),
-                parity=parity_dropdown.value
-            )
-            
-            if serial_assistant.connect():
-                connect_switch.value = True
-                connect_switch.label = "已连接"
-                
-                port_dropdown.disabled = True
-                baudrate_dropdown.disabled = True
-                baudrate_custom.disabled = True
-                databits_dropdown.disabled = True
-                stopbits_dropdown.disabled = True
-                parity_dropdown.disabled = True
-                
-                rts_control_switch.disabled = False
-                dtr_control_switch.disabled = False
-                
-                finsh_enable_switch.disabled = False
-                
-            else:
-                connect_switch.value = False
-                connect_switch.label = "连接失败"
-        else:
-            if finsh_sender.enabled:
-                toggle_finsh_sender(False)
-            
+    def disconnect_port(e=None):
+        if serial_assistant.is_connected:
+            finsh_sender.stop()
             serial_assistant.disconnect()
-            connect_switch.value = False
-            connect_switch.label = "连接"
-            
             port_dropdown.disabled = False
-            baudrate_dropdown.disabled = False
-            baudrate_custom.disabled = False
-            databits_dropdown.disabled = False
-            stopbits_dropdown.disabled = False
-            parity_dropdown.disabled = False
-            
-            rts_control_switch.disabled = True
-            dtr_control_switch.disabled = True
-            
-            finsh_enable_switch.disabled = True
-            finsh_enable_switch.value = False
-            finsh_status_text.value = "数据下发: 串口已断开"
-            finsh_status_text.color = theme.get("TEXT_TERTIARY")
-            
-        page.update()
+            port_status_text.value = "已断开"
+            port_status_text.color = theme.get("TEXT_TERTIARY")
+            page.update()
+    
+    disconnect_btn = ft.IconButton(
+        icon="link_off",
+        icon_color=theme.get("TEXT_SECONDARY"),
+        tooltip="断开连接",
+        on_click=disconnect_port
+    )
     
     serial_config_card = ft.Card(ft.Container(
         content=ft.Column([
             ft.Row([
-                ft.Icon(name="settings_input_component", color=theme.get("TEXT_SECONDARY")),
-                ft.Text("串口配置", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY"))
+                ft.Icon(name="usb", color=theme.get("TEXT_SECONDARY")),
+                ft.Text("串口连接", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY"))
             ], spacing=8),
-            
-            ft.Row([port_dropdown, refresh_port_btn], spacing=4),
-            ft.Row([baudrate_dropdown, baudrate_custom, databits_dropdown], spacing=8),
-            ft.Row([stopbits_dropdown, parity_dropdown], spacing=8),
-            
-            ft.Row([connect_switch, rts_control_switch, dtr_control_switch], spacing=12),
-            
-            ft.Divider(color=theme.get("DIVIDER")),
-            
-            ft.Row([
-                ft.Icon(name="send", color=theme.get("TEXT_SECONDARY")),
-                ft.Text("Finsh数据下发", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
-            finsh_enable_switch,
-            finsh_status_text,
-        ], spacing=12),
-        width=350,
-        padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
-    ))
-    
-    rx_display = ft.TextField(
-        multiline=True,
-        min_lines=20,
-        max_lines=20,
-        read_only=True,
-        value="",
-        text_style=ft.TextStyle(font_family="Consolas", size=12),
-        border_color=theme.get("BORDER"),
-        focused_border_color=theme.get("ACCENT"),
-        expand=True
-    )
-    
-    rx_format_radio = ft.RadioGroup(
-        content=ft.Row([
-            ft.Radio(value="ascii", label="ASCII"),
-            ft.Radio(value="hex", label="HEX")
-        ]),
-        value="ascii",
-        on_change=lambda e: serial_assistant.set_rx_format(
-            DataFormat.HEX if e.control.value == "hex" else DataFormat.ASCII
-        )
-    )
-    
-    rx_pause_checkbox = ft.Checkbox(
-        label="暂停显示",
-        value=False,
-        on_change=lambda e: serial_assistant.pause_rx(e.control.value)
-    )
-    
-    def clear_rx_display(e):
-        rx_display.value = ""
-        serial_assistant.clear_rx_buffer()
-        page.update()
-    
-    rx_clear_btn = ft.ElevatedButton(
-        "清空接收",
-        icon="clear_all",
-        on_click=clear_rx_display
-    )
-    
-    rx_stats_text = ft.Text("接收: 0 字节", size=12, color=theme.get("TEXT_TERTIARY"))
-    
-    rx_card = ft.Card(ft.Container(
-        content=ft.Column([
-            ft.Row([
-                ft.Icon(name="call_received", color=theme.get("TEXT_SECONDARY")),
-                ft.Text("接收区", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
-                ft.Container(expand=True),
-                rx_stats_text
-            ], spacing=8),
-            ft.Container(
-                content=rx_display,
-                expand=True
-            ),
-            ft.Row([
-                rx_format_radio,
-                ft.Container(expand=True),
-                rx_pause_checkbox,
-                rx_clear_btn
-            ], spacing=8)
-        ], spacing=12, expand=True),
-        padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10,
-        expand=True
-    ))
-    
-    tx_input = ft.TextField(
-        multiline=True,
-        min_lines=4,
-        max_lines=4,
-        value="",
-        text_style=ft.TextStyle(font_family="Consolas", size=12),
-        border_color=theme.get("BORDER"),
-        focused_border_color=theme.get("ACCENT")
-    )
-    
-    tx_format_radio = ft.RadioGroup(
-        content=ft.Row([
-            ft.Radio(value="ascii", label="ASCII"),
-            ft.Radio(value="hex", label="HEX")
-        ]),
-        value="ascii",
-        on_change=lambda e: serial_assistant.set_tx_format(
-            DataFormat.HEX if e.control.value == "hex" else DataFormat.ASCII
-        )
-    )
-    
-    tx_newline_checkbox = ft.Checkbox(
-        label="发送新行",
-        value=False,
-        on_change=lambda e: serial_assistant.set_tx_newline(e.control.value)
-    )
-    
-    auto_send_checkbox = ft.Checkbox(
-        label="自动发送",
-        value=False,
-        on_change=lambda e: toggle_auto_send(e.control.value)
-    )
-    
-    auto_send_interval = ft.TextField(
-        label="周期(ms)",
-        value="1000",
-        width=100,
-        text_align=ft.TextAlign.CENTER
-    )
-    
-    def toggle_auto_send(enabled: bool):
-        if enabled:
-            try:
-                interval = int(auto_send_interval.value) / 1000.0
-                if interval < 0.01:
-                    interval = 0.01
-                serial_assistant.start_auto_send(tx_input.value, interval)
-            except:
-                auto_send_checkbox.value = False
-                page.update()
-        else:
-            serial_assistant.stop_auto_send()
-    
-    def send_data(e):
-        if serial_assistant.is_connected:
-            serial_assistant.send_data(tx_input.value)
-    
-    tx_send_btn = ft.ElevatedButton(
-        "发送",
-        icon="send",
-        on_click=send_data
-    )
-    
-    tx_stats_text = ft.Text("发送: 0 字节", size=12, color=theme.get("TEXT_TERTIARY"))
-    
-    tx_card = ft.Card(ft.Container(
-        content=ft.Column([
-            ft.Row([
-                ft.Icon(name="call_made", color=theme.get("TEXT_SECONDARY")),
-                ft.Text("发送区", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
-                ft.Container(expand=True),
-                tx_stats_text
-            ], spacing=8),
-            tx_input,
-            ft.Row([
-                tx_format_radio,
-                tx_newline_checkbox,
-                ft.Container(expand=True),
-            ], spacing=16),
-            ft.Row([
-                auto_send_checkbox,
-                auto_send_interval,
-                ft.Container(expand=True),
-                tx_send_btn
-            ], spacing=12)
+            ft.Row([port_dropdown, refresh_port_btn, disconnect_btn], spacing=4),
+            port_status_text,
         ], spacing=12),
         padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
     ))
-
-    serial_view = ft.Container(
-        content=ft.Column(
-            [
-                ft.Container(
-                    content=ft.Row([
-                        ft.Container(content=serial_config_card, width=350),
-                        ft.Container(width=12),
-                        ft.Container(content=rx_card, expand=True)
-                    ], spacing=0),
-                    height=500,
-                    expand=False
-                ),
-                ft.Container(height=8),
-                ft.Container(content=tx_card, height=300)
-            ],
-            spacing=0, expand=True
-        ),
-        expand=True,
-        padding=12
-    )
-    
-    def on_serial_data_received(data: bytes):
-        formatted = serial_assistant.get_received_data()
-        if formatted:
-            rx_display.value += formatted
-            if len(rx_display.value) > 10000:
-                rx_display.value = rx_display.value[-8000:]
-            
-            text_length = len(rx_display.value)
-            rx_display.selection = ft.TextSelection(
-                base_offset=text_length,
-                extent_offset=text_length
-            )
-            
-            stats = serial_assistant.get_statistics()
-            rx_stats_text.value = f"接收: {stats['rx_bytes']} 字节"
-            tx_stats_text.value = f"发送: {stats['tx_bytes']} 字节"
-            
-            finsh_stats = finsh_sender.get_status()
-            finsh_stats_text.value = f"已发送: {finsh_stats['stats']['commands_sent']} 字段"
-            
-            page.update()
-    
-    serial_assistant.on_data_received = on_serial_data_received
     
     refresh_ports()
+    
+    # 启动自动重连功能
+    serial_assistant.enable_auto_reconnect(enabled=True, interval=2.0)
+    
+    # 自动连接上次使用的串口（静默方式）
+    if config_mgr.should_auto_connect():
+        last_port = config_mgr.get_last_port()
+        if last_port:
+            serial_assistant.set_last_connected_port(last_port)
+            
+            ports = serial_assistant.get_available_ports()
+            if any(p['port'] == last_port for p in ports):
+                serial_assistant.configure(
+                    port=last_port,
+                    baudrate=1000000,
+                    bytesize=8,
+                    stopbits=1,
+                    parity='N'
+                )
+                
+                if serial_assistant.connect():
+                    port_dropdown.value = last_port
+                    port_dropdown.disabled = True
+                    port_status_text.value = "已连接"
+                    port_status_text.color = theme.get("GOOD")
+                    finsh_sender.start()
 
-    time_data_switch = ft.Switch(
-        label="时间数据下发",
-        value=True,
-        on_change=lambda e: finsh_sender.configure(send_time_data=e.control.value)
+    # ==================== 应用设置卡片 ====================
+    def on_minimize_to_tray_changed(e):
+        config_mgr.set_minimize_to_tray(e.control.value)
+    
+    def on_auto_start_changed(e):
+        enabled = e.control.value
+        success = AutoStartManager.set_enabled(enabled)
+        if success:
+            config_mgr.set_auto_start(enabled)
+        else:
+            # 如果失败，恢复开关状态
+            e.control.value = AutoStartManager.is_enabled()
+            page.update()
+    
+    minimize_to_tray_switch = ft.Switch(
+        label="关闭窗口时最小化到系统托盘",
+        value=config_mgr.should_minimize_to_tray(),
+        on_change=on_minimize_to_tray_changed,
+        disabled=not is_tray_available()
     )
     
-    api_data_switch = ft.Switch(
-        label="API数据下发",
-        value=True,
-        on_change=lambda e: finsh_sender.configure(send_api_data=e.control.value)
+    auto_start_switch = ft.Switch(
+        label="开机自动启动",
+        value=AutoStartManager.is_enabled(),
+        on_change=on_auto_start_changed
     )
     
-    performance_data_switch = ft.Switch(
-        label="性能数据下发",
-        value=True,
-        on_change=lambda e: finsh_sender.configure(send_performance_data=e.control.value)
-    )
+    # 根据平台显示不同的提示信息
+    if is_tray_available():
+        tray_hint_text = "提示: 最小化到托盘后，可在系统托盘图标右键菜单中显示窗口或退出"
+        tray_hint_color = theme.get("TEXT_TERTIARY")
+    else:
+        if IS_LINUX:
+            tray_hint_text = "提示: 系统托盘功能需要安装 pystray 和 Pillow 库，且需要显示服务器支持"
+        else:
+            tray_hint_text = "提示: 系统托盘功能需要安装 pystray 和 Pillow 库"
+        tray_hint_color = theme.get("WARN")
     
-    time_interval_field = ft.TextField(
-        label="时间数据间隔(秒)",
-        value="1000.0",
-        width=150,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        on_change=lambda e: finsh_sender.configure(time_interval=float(e.control.value) if e.control.value else 1.0)
-    )
-    
-    api_interval_field = ft.TextField(
-        label="API数据间隔(秒)",
-        value="2.0", 
-        width=150,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        on_change=lambda e: finsh_sender.configure(api_interval=float(e.control.value) if e.control.value else 30.0)
-    )
-    
-    performance_interval_field = ft.TextField(
-        label="性能数据间隔(秒)",
-        value="1.0",
-        width=150, 
-        keyboard_type=ft.KeyboardType.NUMBER,
-        on_change=lambda e: finsh_sender.configure(performance_interval=float(e.control.value) if e.control.value else 5.0)
-    )
-    
-    command_interval_field = ft.TextField(
-        label="命令间隔(毫秒)",
-        value="1000",
-        width=150,
-        keyboard_type=ft.KeyboardType.NUMBER,
-        on_change=lambda e: finsh_sender.configure(min_command_interval=int(e.control.value) if e.control.value else 5)
-    )
-    
-    def reset_to_defaults(e):
-        time_data_switch.value = True
-        api_data_switch.value = True
-        performance_data_switch.value = True
-        time_interval_field.value = "1000.0"
-        api_interval_field.value = "2.0"
-        performance_interval_field.value = "1.0"
-        command_interval_field.value = "1000"
-        
-        finsh_sender.configure(
-            send_time_data=True,
-            send_api_data=True,
-            send_performance_data=True,
-            time_interval=1000.0,
-            api_interval=2.0,
-            performance_interval=5.0,
-            min_command_interval=1000
-        )
-        page.update()
-    
-    reset_defaults_btn = ft.ElevatedButton(
-        "重置为默认",
-        icon="restore",
-        on_click=reset_to_defaults
-    )
-    
-    finsh_config_card = ft.Card(ft.Container(
+    app_settings_card = ft.Card(ft.Container(
         content=ft.Column([
             ft.Row([
-                ft.Icon(name="send", color=theme.get("TEXT_SECONDARY")),
-                ft.Text("Finsh数据下发配置", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY"))
+                ft.Icon(name="settings_applications", color=theme.get("TEXT_SECONDARY")),
+                ft.Text("应用设置", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY"))
             ], spacing=8),
-            
-            ft.Text("数据类型控制", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-            ft.Row([
-                time_data_switch,
-                api_data_switch, 
-                performance_data_switch
-            ], spacing=16),
-            
-            ft.Row([
-                ft.Column([
-                    ft.Text("时间间隔配置", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-                    ft.Row([
-                        time_interval_field,
-                        api_interval_field,
-                        performance_interval_field
-                    ], spacing=12),
-                ], spacing=8),
-                ft.Container(width=20),
-                ft.Column([
-                    ft.Text("其他配置", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
-                    ft.Row([
-                        command_interval_field,
-                        reset_defaults_btn
-                    ], spacing=12)
-                ], spacing=8),
-            ], spacing=12)
-        ], spacing=16),
+            ft.Container(height=8),
+            minimize_to_tray_switch,
+            auto_start_switch,
+            ft.Container(height=8),
+            ft.Text(tray_hint_text, size=11, color=tray_hint_color),
+        ], spacing=8),
         padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
     ))
-    
+
     settings_view = ft.Container(
         content=ft.Column([
             ft.Text("设置", size=24, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
             ft.Container(height=20),
+            serial_config_card,
+            ft.Container(height=20),
             weather_api_config_card,
             ft.Container(height=20),
-            finsh_config_card,
+            app_settings_card,
             ft.Container(height=20),
         ], spacing=16, scroll=ft.ScrollMode.ADAPTIVE, expand=True),
         padding=20,
         expand=True
     )
 
+    # 关于页面：根据平台显示不同的工具名称
+    platform_name = "Windows" if IS_WINDOWS else ("macOS" if IS_MACOS else "Linux")
+    
     about_view = ft.Container(
         content=ft.Column([
             ft.Text("关于", size=24, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
-            ft.Text("SuperKey_Windows支持工具", size=16, color=theme.get("TEXT_SECONDARY")),
+            ft.Text(f"SuperKey_{platform_name}支持工具", size=16, color=theme.get("TEXT_SECONDARY")),
             ft.Text(f"Build v{APP_VERSION} - 适配固件{FIRMWARE_COMPAT}版本", size=14, color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
             ft.Text("制作团队", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
@@ -1469,6 +1294,12 @@ async def main(page: ft.Page):
             ft.Text("• 郭雨十 2361768748@qq.com", size=12, color=theme.get("TEXT_TERTIARY")),
             ft.Text("• 思澈科技（南京）提供技术支持", size=12, color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
+            ft.Text("更新日志 2025年12月9日", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
+            ft.Text("• 修复：天气信息自动更新，APP自动获取权限"size=12, color=theme.get("TEXT_TERTIARY")),
+            ft.Text("• 新增：开机自启，自动检测与连接，配置保存，后台运行，自定义按键配置",size=12, color=theme.get("TEXT_TERTIARY")),
+            ft.Text("• 删除：复杂的串口配置页面和数据下发间隔配置", size=12, color=theme.get("TEXT_TERTIARY")),
+            ft.Text("• 本次更新与旧版本固件部分兼容", size=12, color=theme.get("TEXT_TERTIARY")),
+            ft.Container(height=20),
             ft.Text("开源协议", size=16, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
             ft.Text("• Apache-2.0", size=12, color=theme.get("TEXT_TERTIARY")),
         ], spacing=8),
@@ -1476,23 +1307,273 @@ async def main(page: ft.Page):
         expand=True
     )
 
+    # ==================== 自定义按键视图 ====================
+    custom_key_manager = None
+    custom_key_status = ft.Text("", size=12, color=theme.get("TEXT_TERTIARY"))
+    
+    def create_custom_key_view():
+        """创建自定义按键配置视图 - 支持自由编辑4个组合键"""
+        nonlocal custom_key_manager
+        
+        # 初始化管理器
+        def send_command(cmd: str) -> bool:
+            if serial_assistant and serial_assistant.is_connected:
+                try:
+                    serial_assistant.send_data(cmd + "\r\n")
+                    return True
+                except:
+                    return False
+            return False
+        
+        custom_key_manager = get_custom_key_manager(send_command)
+        
+        # 获取选项列表
+        key_options = get_all_key_options()
+        modifier_options = get_modifier_options()
+        
+        # 创建下拉选项
+        key_dropdown_options = [ft.dropdown.Option(text=name, key=str(code)) for name, code in key_options]
+        modifier_dropdown_options = [ft.dropdown.Option(text=name, key=str(val)) for name, val in modifier_options]
+        preset_options = [ft.dropdown.Option(name) for name in PRESET_SHORTCUTS.keys()]
+        
+        # 存储UI控件引用
+        combo_controls = {}  # {(key_idx, combo_idx): {"mod": dropdown, "key": dropdown}}
+        key_summary_texts = {}  # {key_idx: Text}
+        
+        def update_status(msg: str, is_error: bool = False):
+            custom_key_status.value = msg
+            custom_key_status.color = theme.get("BAD") if is_error else theme.get("GOOD")
+            page.update()
+        
+        def refresh_key_summary(key_idx: int):
+            """刷新按键摘要显示"""
+            if key_idx in key_summary_texts:
+                parts = []
+                for ci in range(4):
+                    text = custom_key_manager.get_combo_display_text(key_idx, ci)
+                    if text != "无":
+                        parts.append(f"[{ci+1}]{text}")
+                key_summary_texts[key_idx].value = " → ".join(parts) if parts else "未配置"
+                page.update()
+        
+        def on_modifier_change(key_idx: int, combo_idx: int):
+            def handler(e):
+                mod_value = int(e.control.value) if e.control.value else 0
+                _, current_keycode = custom_key_manager.get_combo(key_idx, combo_idx)
+                custom_key_manager.set_combo(key_idx, combo_idx, mod_value, current_keycode)
+                refresh_key_summary(key_idx)
+            return handler
+        
+        def on_keycode_change(key_idx: int, combo_idx: int):
+            def handler(e):
+                keycode = int(e.control.value) if e.control.value else 0
+                current_mod, _ = custom_key_manager.get_combo(key_idx, combo_idx)
+                custom_key_manager.set_combo(key_idx, combo_idx, current_mod, keycode)
+                refresh_key_summary(key_idx)
+            return handler
+        
+        def on_preset_change(key_idx: int):
+            def handler(e):
+                preset_name = e.control.value
+                if preset_name:
+                    custom_key_manager.set_key_from_preset(key_idx, preset_name)
+                    # 更新UI控件显示
+                    for ci in range(4):
+                        mod, keycode = custom_key_manager.get_combo(key_idx, ci)
+                        if (key_idx, ci) in combo_controls:
+                            combo_controls[(key_idx, ci)]["mod"].value = str(mod)
+                            combo_controls[(key_idx, ci)]["key"].value = str(keycode)
+                    refresh_key_summary(key_idx)
+                    update_status(f"已应用预设: {preset_name}")
+            return handler
+        
+        def on_apply_click(key_idx: int):
+            def handler(e):
+                if custom_key_manager.sync_key_to_device(key_idx):
+                    update_status(f"按键{key_idx+1} 已同步到设备")
+                else:
+                    update_status("同步失败，请检查串口连接", True)
+            return handler
+        
+        def on_clear_click(key_idx: int):
+            def handler(e):
+                custom_key_manager.clear_key(key_idx)
+                # 清空UI控件
+                for ci in range(4):
+                    if (key_idx, ci) in combo_controls:
+                        combo_controls[(key_idx, ci)]["mod"].value = "0"
+                        combo_controls[(key_idx, ci)]["key"].value = "0"
+                refresh_key_summary(key_idx)
+                update_status(f"已清除 按键{key_idx+1}")
+            return handler
+        
+        def on_sync_all_click(e):
+            if custom_key_manager.sync_all_to_device():
+                update_status("所有配置已同步到设备")
+            else:
+                update_status("同步失败，请检查串口连接", True)
+        
+        # 创建单个组合键编辑行
+        def create_combo_row(key_idx: int, combo_idx: int):
+            current_mod, current_keycode = custom_key_manager.get_combo(key_idx, combo_idx)
+            
+            mod_dropdown = ft.Dropdown(
+                label=f"修饰键",
+                options=modifier_dropdown_options,
+                value=str(current_mod),
+                on_change=on_modifier_change(key_idx, combo_idx),
+                width=120,
+                dense=True,
+                text_size=12,
+            )
+            
+            key_dropdown = ft.Dropdown(
+                label=f"按键",
+                options=key_dropdown_options,
+                value=str(current_keycode),
+                on_change=on_keycode_change(key_idx, combo_idx),
+                width=100,
+                dense=True,
+                text_size=12,
+            )
+            
+            combo_controls[(key_idx, combo_idx)] = {"mod": mod_dropdown, "key": key_dropdown}
+            
+            return ft.Row([
+                ft.Text(f"{combo_idx+1}.", size=12, color=theme.get("TEXT_TERTIARY"), width=20),
+                mod_dropdown,
+                ft.Text("+", size=12, color=theme.get("TEXT_TERTIARY")),
+                key_dropdown,
+            ], spacing=4, alignment=ft.MainAxisAlignment.START)
+        
+        # 创建单个按键配置卡片
+        def create_key_card(key_idx: int):
+            # 预设快捷选择
+            preset_dropdown = ft.Dropdown(
+                label="快捷预设",
+                options=preset_options,
+                on_change=on_preset_change(key_idx),
+                width=180,
+                dense=True,
+                text_size=12,
+            )
+            
+            # 4个组合键编辑行
+            combo_rows = [create_combo_row(key_idx, ci) for ci in range(4)]
+            
+            # 当前配置摘要
+            summary_text = ft.Text(
+                custom_key_manager.get_key_display_text(key_idx),
+                size=11,
+                color=theme.get("GOOD"),
+                italic=True,
+            )
+            key_summary_texts[key_idx] = summary_text
+            refresh_key_summary(key_idx)
+            
+            # 操作按钮
+            apply_btn = ft.ElevatedButton(
+                "同步到设备",
+                icon="sync",
+                on_click=on_apply_click(key_idx),
+                style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=8, vertical=4)),
+            )
+            clear_btn = ft.TextButton(
+                "清除",
+                on_click=on_clear_click(key_idx),
+            )
+            
+            return ft.Container(
+                content=ft.Column([
+                    # 标题栏
+                    ft.Row([
+                        ft.Icon("keyboard", size=16, color=theme.get("TEXT_SECONDARY")),
+                        ft.Text(f"按键 {key_idx + 1}", size=14, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
+                    ], spacing=6),
+                    ft.Divider(height=1, color=theme.get("BORDER")),
+                    # 预设选择
+                    preset_dropdown,
+                    # 4个组合键
+                    ft.Text("自定义映射 (按顺序执行):", size=11, color=theme.get("TEXT_TERTIARY")),
+                    *combo_rows,
+                    # 摘要
+                    ft.Container(
+                        content=summary_text,
+                        padding=ft.padding.only(top=4),
+                    ),
+                    # 操作按钮
+                    ft.Row([apply_btn, clear_btn], spacing=8),
+                ], spacing=6),
+                padding=12,
+                bgcolor=theme.get("BAR_BG_ALPHA"),
+                border_radius=8,
+                width=280,
+            )
+        
+        # 创建3个按键卡片
+        key_cards = ft.Row(
+            [create_key_card(ki) for ki in range(3)],
+            spacing=16,
+            wrap=True,
+            alignment=ft.MainAxisAlignment.START,
+        )
+        
+        sync_all_btn = ft.ElevatedButton(
+            "同步所有到设备",
+            icon="sync",
+            on_click=on_sync_all_click,
+        )
+        
+        # 使用说明
+        help_text = ft.Container(
+            content=ft.Column([
+                ft.Text("使用说明:", size=12, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_SECONDARY")),
+                ft.Text("• 每个按键支持4个组合键，按顺序依次执行", size=11, color=theme.get("TEXT_TERTIARY")),
+                ft.Text("• 可选择预设快捷键快速配置，或自定义每个映射", size=11, color=theme.get("TEXT_TERTIARY")),
+                ft.Text("• 修改后需点击「同步到设备」才能生效", size=11, color=theme.get("TEXT_TERTIARY")),
+            ], spacing=2),
+            padding=ft.padding.only(top=8),
+        )
+        
+        return ft.Container(
+            content=ft.Column([
+                ft.Row([
+                    ft.Icon(name="keyboard", color=theme.get("TEXT_SECONDARY")),
+                    ft.Text("自定义按键配置", size=18, weight=ft.FontWeight.BOLD, color=theme.get("TEXT_PRIMARY")),
+                    ft.Container(expand=True),
+                    sync_all_btn,
+                ], spacing=8),
+                ft.Text("配置设备第5页的3个自定义按键，每个按键支持4个连续组合键", size=12, color=theme.get("TEXT_TERTIARY")),
+                ft.Container(height=12),
+                key_cards,
+                help_text,
+                ft.Container(height=8),
+                custom_key_status,
+            ], spacing=8, scroll=ft.ScrollMode.AUTO),
+            padding=20,
+            expand=True,
+        )
+    
+    custom_key_view = None  # 延迟创建
+
     def show_view(name: str):
+        nonlocal custom_key_view
         current_view["name"] = name
-        if name == "performance":
-            content_host.content = performance_view
-        elif name == "api":
-            content_host.content = api_view
-            if not hasattr(api_view, '_initialized'):
-                if weather_api.get_config().get('api_configured', False):
-                    update_weather()
-                update_stock()
-                api_view._initialized = True
-        elif name == "serial":
-            content_host.content = serial_view
-        elif name == "settings":
-            content_host.content = settings_view
-        elif name == "about":
-            content_host.content = about_view
+        try:
+            if name == "performance":
+                content_host.content = performance_view
+            elif name == "settings":
+                content_host.content = settings_view
+            elif name == "about":
+                content_host.content = about_view
+            elif name == "custom_key":
+                if custom_key_view is None:
+                    custom_key_view = create_custom_key_view()
+                content_host.content = custom_key_view
+        except Exception as e:
+            print(f"视图切换错误: {e}")
+            import traceback
+            traceback.print_exc()
         
         for nav_item in nav_items:
             if not nav_item.is_separator:
@@ -1501,9 +1582,8 @@ async def main(page: ft.Page):
         page.update()
 
     nav_items = [
-        NavigationItem("speed", "性能监控", "performance", theme, show_view, 24),
-        NavigationItem("api", "API 服务", "api", theme, show_view, 24), 
-        NavigationItem("usb", "串口调试", "serial", theme, show_view, 24),
+        NavigationItem("speed", "监控", "performance", theme, show_view, 24),
+        NavigationItem("keyboard", "按键", "custom_key", theme, show_view, 20),
         NavigationItem("", "", "", theme, None, is_separator=True),
         NavigationItem("settings", "设置", "settings", theme, show_view, 20),
         NavigationItem("info_outline", "关于", "about", theme, show_view, 20),
@@ -1528,7 +1608,8 @@ async def main(page: ft.Page):
     nav_controls = []
     nav_controls.append(ft.Container(height=8))
     
-    for i, nav_item in enumerate(nav_items[:3]):
+    # 添加监控和按键导航项（分隔符之前的项）
+    for i, nav_item in enumerate(nav_items[:2]):
         nav_controls.append(ft.Container(
             content=nav_item.container,
             padding=ft.padding.symmetric(horizontal=8, vertical=2)
@@ -1536,12 +1617,14 @@ async def main(page: ft.Page):
     
     nav_controls.append(ft.Container(expand=True))
     
+    # 添加分隔符 (现在是 nav_items[2])
     nav_controls.append(ft.Container(
-        content=nav_items[3].divider,
+        content=nav_items[2].divider,
         padding=ft.padding.symmetric(horizontal=12, vertical=8)
     ))
     
-    for nav_item in nav_items[4:]:
+    # 添加设置和关于 (nav_items[3:])
+    for nav_item in nav_items[3:]:
         nav_controls.append(ft.Container(
             content=nav_item.container,
             padding=ft.padding.symmetric(horizontal=8, vertical=2)
@@ -1570,10 +1653,19 @@ async def main(page: ft.Page):
 
     content_column = ft.Column([title_bar, main_row], spacing=0, expand=True)
 
-    if theme.current_theme == "light":
-        shell_bg = "#EEF0F0F0"
+    # 跨平台背景颜色设置
+    if IS_WINDOWS:
+        # Windows: 使用半透明背景配合Mica/Acrylic效果
+        if theme.current_theme == "light":
+            shell_bg = "#EEF0F0F0"
+        else:
+            shell_bg = "#EE0E0E10"
     else:
-        shell_bg = "#EE0E0E10"
+        # macOS/Linux: 使用纯色背景
+        if theme.current_theme == "light":
+            shell_bg = "#F0F0F0"
+        else:
+            shell_bg = "#1A1A1A"
     
     shell = ft.Container(
         content=content_column,
@@ -1599,6 +1691,13 @@ async def main(page: ft.Page):
         update_weather_config()
     
     initialize_weather_config()
+    
+    # 如果天气API已配置，自动刷新天气数据
+    if weather_api.get_config().get('api_configured', False):
+        try:
+            update_weather()
+        except:
+            pass
 
     def build_disks(items):
         disk_list.controls.clear()
@@ -1619,9 +1718,10 @@ async def main(page: ft.Page):
     build_disks(hw_monitor.get_disk_data())
 
     async def apply_backdrop_only():
-        """仅应用背景效果，不调整窗口尺寸"""
-        await asyncio.sleep(0.8)
-        apply_backdrop_for_page(page, theme, prefer_mica=True)
+        """仅应用背景效果，不调整窗口尺寸（仅Windows有效）"""
+        if IS_WINDOWS:
+            await asyncio.sleep(0.8)
+            apply_backdrop_for_page(page, theme, prefer_mica=True)
 
     page.run_task(apply_backdrop_only)
 
@@ -1699,30 +1799,10 @@ async def main(page: ft.Page):
         
         weather_forecast_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
         
-        stock_price.color = theme.get("TEXT_PRIMARY")
-        stock_refresh_btn.icon_color = theme.get("ACCENT")
-        stock_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
-        
-        for ctrl in stock_details.controls:
-            ctrl.color = theme.get("TEXT_TERTIARY")
-        
         serial_config_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
-        rx_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
-        tx_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
-        
-        rx_display.border_color = theme.get("BORDER")
-        rx_display.focused_border_color = theme.get("ACCENT")
-        tx_input.border_color = theme.get("BORDER")
-        tx_input.focused_border_color = theme.get("ACCENT")
-        
-        rx_stats_text.color = theme.get("TEXT_TERTIARY")
-        tx_stats_text.color = theme.get("TEXT_TERTIARY")
-        finsh_stats_text.color = theme.get("TEXT_TERTIARY")
         
         weather_api_config_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
         weather_config_status.color = theme.get("TEXT_TERTIARY")
-        
-        finsh_config_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
         
         if hasattr(settings_view, 'content') and hasattr(settings_view.content, 'controls'):
             for ctrl in settings_view.content.controls:
@@ -1743,12 +1823,21 @@ async def main(page: ft.Page):
                         else:
                             ctrl.color = theme.get("TEXT_TERTIARY")
         
-        if theme.current_theme == "light":
-            shell.bgcolor = "#EEF0F0F0"
+        # 跨平台背景颜色更新
+        if IS_WINDOWS:
+            if theme.current_theme == "light":
+                shell.bgcolor = "#EEF0F0F0"
+            else:
+                shell.bgcolor = "#EE0E0E10"
         else:
-            shell.bgcolor = "#EE0E0E10"
+            if theme.current_theme == "light":
+                shell.bgcolor = "#F0F0F0"
+            else:
+                shell.bgcolor = "#1A1A1A"
 
     async def updater():
+        weather_update_interval = 30 * 60  # 天气更新间隔：30分钟
+        
         while True:
             t0 = time.time()
             
@@ -1765,7 +1854,17 @@ async def main(page: ft.Page):
                     page.update()
                 
                 await asyncio.sleep(0.2)
-                apply_backdrop_for_page(page, theme, prefer_mica=True)
+                if IS_WINDOWS:
+                    apply_backdrop_for_page(page, theme, prefer_mica=True)
+            
+            # ==================== 天气自动更新 ====================
+            if t0 - weather_state["last_update"] > weather_update_interval:
+                if weather_api.get_config().get('api_configured', False):
+                    try:
+                        update_weather()
+                        # update_weather 内部已经更新了 weather_state["last_update"]
+                    except Exception:
+                        pass  # 静默失败，下次再试
             
             if current_view["name"] == "performance":
                 c = hw_monitor.get_cpu_data()
@@ -1809,24 +1908,6 @@ async def main(page: ft.Page):
                 n = hw_monitor.get_network_data()
                 net_up.value = f"↑ {bytes2human(n['up'])}/s" if n["up"] is not None else "↑ —"
                 net_dn.value = f"↓ {bytes2human(n['down'])}/s" if n["down"] is not None else "↓ —"
-            
-            if current_view["name"] == "serial":
-                if serial_assistant.is_connected:
-                    stats = serial_assistant.get_statistics()
-                    rx_stats_text.value = f"接收: {stats['rx_bytes']} 字节"
-                    tx_stats_text.value = f"发送: {stats['tx_bytes']} 字节"
-                
-                if finsh_sender.enabled:
-                    finsh_status = finsh_sender.get_status()
-                    finsh_stats_text.value = f"已发送: {finsh_status['stats']['commands_sent']} 字段"
-                    
-                    error_count = finsh_status['stats']['errors']
-                    if error_count > 0:
-                        finsh_status_text.value = f"数据下发: 运行中 (错误: {error_count})"
-                        finsh_status_text.color = theme.get("WARN")
-                    else:
-                        finsh_status_text.value = "数据下发: 运行中"
-                        finsh_status_text.color = theme.get("GOOD")
 
             try:
                 await page.update_async()

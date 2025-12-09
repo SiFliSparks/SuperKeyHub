@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+串口助手模块 - 支持自动检测断连和重连
+"""
 import serial
 import serial.tools.list_ports
 import threading
@@ -24,10 +27,23 @@ class SerialAssistant:
         self.rx_thread: Optional[threading.Thread] = None
         self.tx_thread: Optional[threading.Thread] = None
         self.auto_send_thread: Optional[threading.Thread] = None
+        self.monitor_thread: Optional[threading.Thread] = None  # 连接监控线程
         self.stop_threads = threading.Event()
+        self.stop_monitor = threading.Event()  # 单独控制监控线程
         
         self.on_data_received: Optional[Callable] = None
         self.on_connection_changed: Optional[Callable] = None
+        # 自动重连回调: (成功?, 端口名, 是否为重连)
+        self.on_auto_reconnect: Optional[Callable[[bool, str, bool], None]] = None
+        
+        # 自动重连配置
+        self._auto_reconnect_enabled = True  # 默认启用自动重连
+        self._reconnect_interval = 2.0  # 重连检测间隔(秒)
+        self._last_connected_port = ''  # 上次成功连接的端口
+        self._reconnect_lock = threading.Lock()
+        self._is_reconnecting = False  # 防止重复重连
+        self._connection_lost = False  # 标记连接是否丢失（用于区分主动断开和意外断开）
+        self._manual_disconnect = False  # 标记是否为手动断开
         
         self.config = {
             'port': '',
@@ -60,6 +76,279 @@ class SerialAssistant:
             'errors': 0,
             'start_time': None
         }
+    
+    # =========================================================================
+    # 自动重连相关方法
+    # =========================================================================
+    
+    def enable_auto_reconnect(self, enabled: bool = True, interval: float = 2.0):
+        """启用/禁用自动重连功能
+        
+        Args:
+            enabled: 是否启用自动重连
+            interval: 检测间隔(秒)
+        """
+        self._auto_reconnect_enabled = enabled
+        self._reconnect_interval = max(0.5, interval)  # 最小0.5秒
+        
+        if enabled and not self.stop_monitor.is_set():
+            self._start_monitor()
+        elif not enabled:
+            self._stop_monitor()
+    
+    def is_auto_reconnect_enabled(self) -> bool:
+        """检查是否启用了自动重连"""
+        return self._auto_reconnect_enabled
+    
+    def get_last_connected_port(self) -> str:
+        """获取上次成功连接的端口"""
+        return self._last_connected_port
+    
+    def set_last_connected_port(self, port: str):
+        """设置上次连接的端口（用于启动时自动连接）"""
+        self._last_connected_port = port
+    
+    def _start_monitor(self):
+        """启动连接监控线程"""
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            return
+        
+        self.stop_monitor.clear()
+        self.monitor_thread = threading.Thread(target=self._monitor_worker, daemon=True)
+        self.monitor_thread.start()
+    
+    def _stop_monitor(self):
+        """停止连接监控线程"""
+        self.stop_monitor.set()
+        if self.monitor_thread and self.monitor_thread.is_alive():
+            self.monitor_thread.join(timeout=1)
+    
+    def _monitor_worker(self):
+        """连接监控工作线程"""
+        while not self.stop_monitor.is_set():
+            try:
+                self._check_connection_status()
+            except Exception:
+                pass
+            
+            # 分段sleep，以便更快响应stop信号
+            for _ in range(int(self._reconnect_interval * 10)):
+                if self.stop_monitor.is_set():
+                    break
+                time.sleep(0.1)
+    
+    def _check_connection_status(self):
+        """检查连接状态并尝试重连"""
+        if not self._auto_reconnect_enabled:
+            return
+        
+        # 如果是手动断开的，不自动重连
+        if self._manual_disconnect:
+            return
+        
+        with self._reconnect_lock:
+            if self._is_reconnecting:
+                return
+            
+            # 情况1: 已连接，检查连接是否正常
+            if self.is_connected and self.serial_port:
+                if not self._is_port_healthy():
+                    # 连接丢失
+                    self._connection_lost = True
+                    self._handle_connection_lost()
+            
+            # 情况2: 未连接但有上次的端口，尝试重连
+            elif not self.is_connected and self._last_connected_port and self._connection_lost:
+                self._try_reconnect()
+    
+    def _is_port_healthy(self) -> bool:
+        """检查端口是否正常"""
+        if not self.serial_port:
+            return False
+        
+        try:
+            # 检查端口是否仍然打开
+            if not self.serial_port.is_open:
+                return False
+            
+            # 检查端口是否仍然存在于系统中
+            current_ports = [p.device for p in serial.tools.list_ports.comports()]
+            if self.config['port'] not in current_ports:
+                return False
+            
+            # 尝试读取CTS状态（这是一个轻量级的检查方式）
+            # 如果端口已断开，这通常会抛出异常
+            try:
+                _ = self.serial_port.cts
+            except (serial.SerialException, OSError):
+                return False
+            
+            return True
+            
+        except Exception:
+            return False
+    
+    def _handle_connection_lost(self):
+        """处理连接丢失"""
+        # 记录端口信息
+        lost_port = self.config['port']
+        
+        # 清理当前连接
+        self._cleanup_connection()
+        
+        # 通知连接状态变化
+        if self.on_connection_changed:
+            self.on_connection_changed(False)
+    
+    def _cleanup_connection(self):
+        """清理连接资源（内部使用，不触发回调）"""
+        self.stop_auto_send()
+        self.stop_threads.set()
+        
+        if self.rx_thread and self.rx_thread.is_alive():
+            self.rx_thread.join(timeout=0.5)
+        if self.tx_thread and self.tx_thread.is_alive():
+            self.tx_thread.join(timeout=0.5)
+        
+        if self.serial_port:
+            try:
+                if self.serial_port.is_open:
+                    self.serial_port.close()
+            except:
+                pass
+        
+        self.serial_port = None
+        self.is_connected = False
+        
+        # 清空队列
+        while not self.rx_queue.empty():
+            try:
+                self.rx_queue.get_nowait()
+            except:
+                break
+        while not self.tx_queue.empty():
+            try:
+                self.tx_queue.get_nowait()
+            except:
+                break
+    
+    def _try_reconnect(self):
+        """尝试重新连接"""
+        if self._is_reconnecting:
+            return
+        
+        self._is_reconnecting = True
+        
+        try:
+            target_port = self._last_connected_port
+            
+            # 检查目标端口是否存在
+            current_ports = [p.device for p in serial.tools.list_ports.comports()]
+            if target_port not in current_ports:
+                return
+            
+            # 配置端口
+            self.config['port'] = target_port
+            
+            # 尝试连接
+            if self._connect_internal():
+                self._connection_lost = False
+                # 通知重连成功
+                if self.on_auto_reconnect:
+                    self.on_auto_reconnect(True, target_port, True)
+            
+        finally:
+            self._is_reconnecting = False
+    
+    def _connect_internal(self) -> bool:
+        """内部连接方法（不设置last_connected_port）"""
+        if self.is_connected:
+            return True
+        
+        try:
+            bytesize_map = {5: serial.FIVEBITS, 6: serial.SIXBITS,
+                           7: serial.SEVENBITS, 8: serial.EIGHTBITS}
+            stopbits_map = {1: serial.STOPBITS_ONE, 1.5: serial.STOPBITS_ONE_POINT_FIVE,
+                           2: serial.STOPBITS_TWO}
+            parity_map = {'N': serial.PARITY_NONE, 'E': serial.PARITY_EVEN,
+                         'O': serial.PARITY_ODD, 'M': serial.PARITY_MARK,
+                         'S': serial.PARITY_SPACE}
+            
+            self.serial_port = serial.Serial()
+            self.serial_port.port = self.config['port']
+            self.serial_port.baudrate = self.config['baudrate']
+            self.serial_port.bytesize = bytesize_map.get(self.config['bytesize'], serial.EIGHTBITS)
+            self.serial_port.stopbits = stopbits_map.get(self.config['stopbits'], serial.STOPBITS_ONE)
+            self.serial_port.parity = parity_map.get(self.config['parity'], serial.PARITY_NONE)
+            self.serial_port.timeout = self.config['timeout']
+            self.serial_port.write_timeout = self.config['write_timeout']
+            
+            self.serial_port.rts = False
+            self.serial_port.dtr = False
+            
+            self.serial_port.open()
+            
+            time.sleep(0.1)
+            
+            self._apply_rts_dtr_settings()
+            
+            self.is_connected = True
+            self.stop_threads.clear()
+            
+            self.rx_thread = threading.Thread(target=self._rx_worker, daemon=True)
+            self.tx_thread = threading.Thread(target=self._tx_worker, daemon=True)
+            self.rx_thread.start()
+            self.tx_thread.start()
+            
+            self.stats['start_time'] = datetime.now()
+            self.stats['rx_bytes'] = 0
+            self.stats['tx_bytes'] = 0
+            self.stats['rx_packets'] = 0
+            self.stats['tx_packets'] = 0
+            self.stats['errors'] = 0
+            
+            if self.on_connection_changed:
+                self.on_connection_changed(True)
+            
+            return True
+            
+        except Exception:
+            self.is_connected = False
+            self.stats['errors'] += 1
+            return False
+    
+    def try_auto_connect(self, port: str) -> bool:
+        """尝试静默自动连接到指定端口
+        
+        用于启动时自动连接上次使用的端口
+        
+        Args:
+            port: 要连接的端口名
+            
+        Returns:
+            是否连接成功
+        """
+        # 检查端口是否存在
+        current_ports = [p.device for p in serial.tools.list_ports.comports()]
+        if port not in current_ports:
+            return False
+        
+        # 配置端口
+        self.configure(port=port)
+        
+        # 尝试连接
+        success = self.connect()
+        
+        if success:
+            # 通知自动连接成功（不是重连）
+            if self.on_auto_reconnect:
+                self.on_auto_reconnect(True, port, False)
+        
+        return success
+    
+    # =========================================================================
+    # 原有方法
+    # =========================================================================
     
     def get_available_ports(self) -> List[Dict[str, str]]:
         ports = []
@@ -163,64 +452,34 @@ class SerialAssistant:
             return False
     
     def connect(self) -> bool:
+        """连接到配置的串口"""
         if self.is_connected:
             return True
         
-        try:
-            bytesize_map = {5: serial.FIVEBITS, 6: serial.SIXBITS,
-                           7: serial.SEVENBITS, 8: serial.EIGHTBITS}
-            stopbits_map = {1: serial.STOPBITS_ONE, 1.5: serial.STOPBITS_ONE_POINT_FIVE,
-                           2: serial.STOPBITS_TWO}
-            parity_map = {'N': serial.PARITY_NONE, 'E': serial.PARITY_EVEN,
-                         'O': serial.PARITY_ODD, 'M': serial.PARITY_MARK,
-                         'S': serial.PARITY_SPACE}
+        # 重置手动断开标志
+        self._manual_disconnect = False
+        
+        success = self._connect_internal()
+        
+        if success:
+            # 记录成功连接的端口
+            self._last_connected_port = self.config['port']
+            self._connection_lost = False
             
-            self.serial_port = serial.Serial()
-            self.serial_port.port = self.config['port']
-            self.serial_port.baudrate = self.config['baudrate']
-            self.serial_port.bytesize = bytesize_map.get(self.config['bytesize'], serial.EIGHTBITS)
-            self.serial_port.stopbits = stopbits_map.get(self.config['stopbits'], serial.STOPBITS_ONE)
-            self.serial_port.parity = parity_map.get(self.config['parity'], serial.PARITY_NONE)
-            self.serial_port.timeout = self.config['timeout']
-            self.serial_port.write_timeout = self.config['write_timeout']
-            
-            self.serial_port.rts = False
-            self.serial_port.dtr = False
-            
-            self.serial_port.open()
-            
-            time.sleep(0.1)
-            
-            self._apply_rts_dtr_settings()
-            
-            self.is_connected = True
-            self.stop_threads.clear()
-            
-            self.rx_thread = threading.Thread(target=self._rx_worker, daemon=True)
-            self.tx_thread = threading.Thread(target=self._tx_worker, daemon=True)
-            self.rx_thread.start()
-            self.tx_thread.start()
-            
-            self.stats['start_time'] = datetime.now()
-            self.stats['rx_bytes'] = 0
-            self.stats['tx_bytes'] = 0
-            self.stats['rx_packets'] = 0
-            self.stats['tx_packets'] = 0
-            self.stats['errors'] = 0
-            
-            if self.on_connection_changed:
-                self.on_connection_changed(True)
-            
-            return True
-            
-        except Exception:
-            self.is_connected = False
-            self.stats['errors'] += 1
-            return False
+            # 启动监控线程
+            if self._auto_reconnect_enabled:
+                self._start_monitor()
+        
+        return success
     
     def disconnect(self):
+        """断开连接"""
         if not self.is_connected:
             return
+        
+        # 标记为手动断开
+        self._manual_disconnect = True
+        self._connection_lost = False
         
         self.stop_auto_send()
         
@@ -279,6 +538,9 @@ class SerialAssistant:
                     
             except serial.SerialException:
                 self.stats['errors'] += 1
+                # 串口异常可能意味着断开
+                if self._auto_reconnect_enabled and not self._manual_disconnect:
+                    self._connection_lost = True
                 time.sleep(0.1)
             except Exception:
                 self.stats['errors'] += 1
@@ -300,6 +562,9 @@ class SerialAssistant:
                 continue
             except serial.SerialException:
                 self.stats['errors'] += 1
+                # 串口异常可能意味着断开
+                if self._auto_reconnect_enabled and not self._manual_disconnect:
+                    self._connection_lost = True
             except Exception:
                 self.stats['errors'] += 1
     
@@ -410,6 +675,7 @@ class SerialAssistant:
         return stats
     
     def __del__(self):
+        self._stop_monitor()
         self.disconnect()
 
 

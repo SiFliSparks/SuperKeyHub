@@ -387,7 +387,9 @@ def main():
         'flet': 'flet',
         'psutil': 'psutil', 
         'pyserial': 'serial',
-        'requests': 'requests'
+        'requests': 'requests',
+        'pystray': 'pystray',  
+        'Pillow': 'PIL',      
     }
     
     optional_packages = {

@@ -49,3 +49,9 @@ tmp/
 
 # requirements files
 build_requirements.txt
+
+# PyInstaller
+*.spec
+
+# User config directory (不要提交用户配置)
+# 配置文件保存在 %APPDATA%/SuperKey/ 目录下，不在项目目录中
