@@ -328,10 +328,10 @@ jobs:
       - name: Upload to COS
         uses: OpenSiFli/SiFliMirrorSync@v1
         with:
-          secret_id: ${{ secrets.COS_SECRET_ID }}
-          secret_key: ${{ secrets.COS_SECRET_KEY }}
-          region: ${{ secrets.COS_REGION }}
-          bucket: ${{ secrets.COS_BUCKET }}
+          secret_id: ${{ secrets.COS_DOCS_SECRET_ID }}
+          secret_key: ${{ secrets.COS_DOCS_SECRET_KEY }}
+          region: ${{ secrets.COS_DOCS_REGION }}
+          bucket: ${{ secrets.COS_DOCS_BUCKET }}
           prefix: github_assets/${{ github.repository }}/releases/download/v${{ needs.check-release.outputs.app_version }}/
           artifacts: artifacts/
           delete_remote: true
