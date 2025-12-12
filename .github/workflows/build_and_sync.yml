@@ -163,8 +163,10 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          # Windows 平台安装所有依赖（包括 windows extras）
-          uv sync --extra windows --all-groups
+          # Windows 平台安装所有依赖（包括 windows extras 和 dev 依赖组）
+          uv sync --extra windows
+          # 单独安装 dev 依赖组中的构建工具
+          uv pip install ruff mypy pyinstaller
 
       - name: Run lint check
         run: |
