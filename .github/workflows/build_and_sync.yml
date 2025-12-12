@@ -45,7 +45,7 @@ jobs:
         run: |
           # 检查是否是 tag 触发
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "📌 Triggered by tag: ${{ github.ref_name }}"
+            echo "[TAG] Triggered by tag: ${{ github.ref_name }}"
             echo "should_release=true" >> $GITHUB_OUTPUT
             echo "is_tag=true" >> $GITHUB_OUTPUT
             # 从 tag 名称提取版本号（去掉 v 前缀）
@@ -58,7 +58,7 @@ jobs:
           
           # 检查是否手动触发并强制发布
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_release }}" == "true" ]]; then
-            echo "🚀 Force release triggered manually"
+            echo "[BUILD] Force release triggered manually"
             FORCE_RELEASE=true
           else
             FORCE_RELEASE=false
@@ -66,32 +66,32 @@ jobs:
           
           # 检查 commit message 是否包含 release（不区分大小写）
           COMMIT_MSG=$(git log -1 --pretty=%B)
-          echo "📝 Commit message: $COMMIT_MSG"
+          echo "[MSG] Commit message: $COMMIT_MSG"
           
           if echo "$COMMIT_MSG" | grep -iq "release" || [[ "$FORCE_RELEASE" == "true" ]]; then
-            echo "✅ Release keyword found or force release enabled"
+            echo "[OK] Release keyword found or force release enabled"
             
             # 从 main.py 提取 APP_VERSION
             APP_VERSION=$(grep -oP 'APP_VERSION:\s*str\s*=\s*"\K[^"]+' main.py)
             
             if [[ -z "$APP_VERSION" ]]; then
-              echo "❌ Could not extract APP_VERSION from main.py"
+              echo "[FAIL] Could not extract APP_VERSION from main.py"
               exit 1
             fi
             
-            echo "📦 Detected APP_VERSION: $APP_VERSION"
+            echo "[PKG] Detected APP_VERSION: $APP_VERSION"
             
             # 检查该版本的 tag 是否已存在
             if git rev-parse "v$APP_VERSION" >/dev/null 2>&1; then
-              echo "⚠️ Tag v$APP_VERSION already exists, skipping release"
+              echo "[WARN] Tag v$APP_VERSION already exists, skipping release"
               echo "should_release=false" >> $GITHUB_OUTPUT
             else
-              echo "✅ Tag v$APP_VERSION does not exist, will create release"
+              echo "[OK] Tag v$APP_VERSION does not exist, will create release"
               echo "should_release=true" >> $GITHUB_OUTPUT
               echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
             fi
           else
-            echo "ℹ️ No release keyword in commit message, skipping release"
+            echo "[INFO] No release keyword in commit message, skipping release"
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
 
@@ -130,7 +130,7 @@ jobs:
           $asset = $releases.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
           
           if (-not $asset) {
-              Write-Error "❌ No matching sftool asset found for x86_64-pc-windows-msvc"
+              Write-Error "[FAIL] No matching sftool asset found for x86_64-pc-windows-msvc"
               exit 1
           }
           
@@ -149,10 +149,10 @@ jobs:
           
           # 验证 sftool.exe 存在
           if (Test-Path "sftool.exe") {
-              Write-Host "✅ sftool.exe downloaded successfully"
+              Write-Host "[OK] sftool.exe downloaded successfully"
               Get-Item "sftool.exe" | Select-Object Name, Length
           } else {
-              Write-Error "❌ sftool.exe not found after extraction"
+              Write-Error "[FAIL] sftool.exe not found after extraction"
               Get-ChildItem "."
               exit 1
           }
@@ -169,6 +169,9 @@ jobs:
           uv pip install ruff mypy pyinstaller
 
       - name: Run lint check
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           uv run ruff check . --select=E,F
         continue-on-error: true
@@ -181,9 +184,9 @@ jobs:
           $versionMatch = Select-String -Path "main.py" -Pattern 'APP_VERSION:\s*str\s*=\s*"([^"]+)"'
           if ($versionMatch) {
               $appVersion = $versionMatch.Matches.Groups[1].Value
-              Write-Host "✅ Detected APP_VERSION: $appVersion"
+              Write-Host "[OK] Detected APP_VERSION: $appVersion"
           } else {
-              Write-Error "❌ Could not find APP_VERSION in main.py"
+              Write-Error "[FAIL] Could not find APP_VERSION in main.py"
               exit 1
           }
           
@@ -192,7 +195,7 @@ jobs:
           $firmwareCompat = ""
           if ($firmwareMatch) {
               $firmwareCompat = $firmwareMatch.Matches.Groups[1].Value
-              Write-Host "✅ Detected FIRMWARE_COMPAT: $firmwareCompat"
+              Write-Host "[OK] Detected FIRMWARE_COMPAT: $firmwareCompat"
           }
           
           # 获取当前时间戳
@@ -211,13 +214,16 @@ jobs:
           $jsonContent = $versionInfo | ConvertTo-Json -Depth 10
           $jsonContent | Out-File -FilePath "hub_verid.json" -Encoding UTF8
           
-          Write-Host "✅ Created hub_verid.json:"
+          Write-Host "[OK] Created hub_verid.json:"
           Get-Content "hub_verid.json"
           
           # 设置输出变量供后续步骤使用
           echo "app_version=$appVersion" >> $env:GITHUB_OUTPUT
 
       - name: Build with PyInstaller
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           uv run python build.py --no-installer
           
@@ -227,27 +233,27 @@ jobs:
           # 将 sftool.exe 复制到构建输出目录
           if (Test-Path "sftool.exe") {
               Copy-Item "sftool.exe" -Destination "dist\${{ env.APP_NAME }}\" -Force
-              Write-Host "✅ sftool.exe copied to dist folder"
+              Write-Host "[OK] sftool.exe copied to dist folder"
           } else {
-              Write-Warning "⚠️ sftool.exe not found in working directory"
+              Write-Warning "[WARN] sftool.exe not found in working directory"
           }
 
       - name: Verify build output
         shell: pwsh
         run: |
           if (Test-Path "dist\${{ env.APP_NAME }}\${{ env.APP_NAME }}.exe") {
-              Write-Host "✅ Build successful"
+              Write-Host "[OK] Build successful"
               Get-ChildItem "dist\${{ env.APP_NAME }}" | Select-Object Name, Length
           } else {
-              Write-Error "❌ Build failed - exe not found"
+              Write-Error "[FAIL] Build failed - exe not found"
               exit 1
           }
           
           # 验证 sftool.exe 在构建输出中
           if (Test-Path "dist\${{ env.APP_NAME }}\sftool.exe") {
-              Write-Host "✅ sftool.exe included in build"
+              Write-Host "[OK] sftool.exe included in build"
           } else {
-              Write-Error "❌ sftool.exe not found in build output"
+              Write-Error "[FAIL] sftool.exe not found in build output"
               exit 1
           }
 
@@ -266,10 +272,10 @@ jobs:
           $installerPath = "dist\${{ env.APP_NAME }}-${version}-Setup.exe"
           
           if (Test-Path $installerPath) {
-              Write-Host "✅ Installer created: $installerPath"
+              Write-Host "[OK] Installer created: $installerPath"
               Get-Item $installerPath | Select-Object Name, Length
           } else {
-              Write-Warning "⚠️ Installer not found at expected path"
+              Write-Warning "[WARN] Installer not found at expected path"
               Get-ChildItem "dist" -Filter "*.exe"
           }
 
@@ -280,14 +286,14 @@ jobs:
           $zipName = "${{ env.APP_NAME }}-${version}-Windows-Portable.zip"
           
           Compress-Archive -Path "dist\${{ env.APP_NAME }}\*" -DestinationPath "dist\$zipName"
-          Write-Host "✅ Portable ZIP created: dist\$zipName"
+          Write-Host "[OK] Portable ZIP created: dist\$zipName"
 
       - name: Copy version JSON to dist
         shell: pwsh
         run: |
           # 将版本 JSON 文件复制到 dist 目录
           Copy-Item "hub_verid.json" -Destination "dist\" -Force
-          Write-Host "✅ hub_verid.json copied to dist folder"
+          Write-Host "[OK] hub_verid.json copied to dist folder"
           Get-Content "dist\hub_verid.json"
 
       - name: Upload build artifacts
@@ -316,7 +322,7 @@ jobs:
 
       - name: List artifacts
         run: |
-          echo "📦 Downloaded artifacts:"
+          echo "[PKG] Downloaded artifacts:"
           find artifacts -type f -exec ls -lh {} \;
 
       - name: Upload to COS
@@ -359,14 +365,14 @@ jobs:
           
           # 检查 tag 是否已存在
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-            echo "⚠️ Tag $TAG_NAME already exists"
+            echo "[WARN] Tag $TAG_NAME already exists"
           else
-            echo "🏷️ Creating tag: $TAG_NAME"
+            echo "[TAG] Creating tag: $TAG_NAME"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
             git push origin "$TAG_NAME"
-            echo "✅ Tag $TAG_NAME created and pushed"
+            echo "[OK] Tag $TAG_NAME created and pushed"
           fi
 
       - name: Create Release
