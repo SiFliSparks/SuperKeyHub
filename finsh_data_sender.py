@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Finsh数据发送模块
 支持天气数据延迟发送
 """
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
-from typing import Dict, Any, Optional
 from enum import Enum
+from typing import Any
+
 
 class DataCategory(Enum):
     TIME = "time"
     API = "api"
     PERFORMANCE = "performance"
 
+
 class CityCodeMapper:
-    CITY_MAPPING = {
+    CITY_MAPPING: dict[str, int] = {
         # Popular cities
         "未知": 999, "Error": 999,
         "杭州": 0, "hangzhou": 0,
-        "上海": 1, "shanghai": 1, 
+        "上海": 1, "shanghai": 1,
         "北京": 2, "beijing": 2,
         "广州": 3, "guangzhou": 3,
         "深圳": 4, "shenzhen": 4,
@@ -34,7 +36,7 @@ class CityCodeMapper:
         "青岛": 12, "qingdao": 12,
         "厦门": 13, "xiamen": 13,
         "长沙": 14, "changsha": 14,
-        
+
         # Hebei Province
         "石家庄": 15, "shijiazhuang": 15,
         "唐山": 16, "tangshan": 16,
@@ -47,7 +49,7 @@ class CityCodeMapper:
         "沧州": 23, "cangzhou": 23,
         "廊坊": 24, "langfang": 24,
         "衡水": 25, "hengshui": 25,
-        
+
         # Shanxi Province
         "太原": 26, "taiyuan": 26,
         "大同": 27, "datong": 27,
@@ -60,7 +62,7 @@ class CityCodeMapper:
         "忻州": 34, "xinzhou": 34,
         "临汾": 35, "linfen": 35,
         "吕梁": 36, "lvliang": 36,
-        
+
         # the Nei Monggol [Inner Mongolia] Autonomous Region
         "呼和浩特": 37, "hohhot": 37,
         "包头": 38, "baotou": 38,
@@ -71,7 +73,7 @@ class CityCodeMapper:
         "呼伦贝尔": 43, "hulunbuir": 43,
         "巴彦淖尔": 44, "bayannur": 44,
         "乌兰察布": 45, "ulanqab": 45,
-        
+
         # Liaoning Province
         "沈阳": 46, "shenyang": 46,
         "大连": 47, "dalian": 47,
@@ -87,7 +89,7 @@ class CityCodeMapper:
         "铁岭": 57, "tieling": 57,
         "朝阳": 58, "chaoyang": 58,
         "葫芦岛": 59, "huludao": 59,
-        
+
         # Jilin Province
         "长春": 60, "changchun": 60,
         "吉林": 61, "jilin": 61,
@@ -97,7 +99,7 @@ class CityCodeMapper:
         "白山": 65, "baishan": 65,
         "松原": 66, "songyuan": 66,
         "白城": 67, "baicheng": 67,
-        
+
         # Heilongjiang Province
         "哈尔滨": 68, "harbin": 68,
         "齐齐哈尔": 69, "qiqihar": 69,
@@ -111,7 +113,7 @@ class CityCodeMapper:
         "牡丹江": 77, "mudanjiang": 77,
         "黑河": 78, "heihe": 78,
         "绥化": 79, "suihua": 79,
-        
+
         # Jiangsu Province
         "无锡": 80, "wuxi": 80,
         "徐州": 81, "xuzhou": 81,
@@ -124,7 +126,7 @@ class CityCodeMapper:
         "镇江": 88, "zhenjiang": 88,
         "泰州": 89, "taizhou": 89,
         "宿迁": 90, "suqian": 90,
-        
+
         # Zhejiang Province
         "宁波": 91, "ningbo": 91,
         "温州": 92, "wenzhou": 92,
@@ -136,7 +138,7 @@ class CityCodeMapper:
         "舟山": 98, "zhoushan": 98,
         "台州": 99, "taizhou_zj": 99,
         "丽水": 100, "lishui": 100,
-        
+
         # Anhui Province
         "合肥": 101, "hefei": 101,
         "芜湖": 102, "wuhu": 102,
@@ -154,7 +156,7 @@ class CityCodeMapper:
         "亳州": 114, "bozhou": 114,
         "池州": 115, "chizhou": 115,
         "宣城": 116, "xuancheng": 116,
-        
+
         # Fujian Province
         "福州": 117, "fuzhou": 117,
         "莆田": 118, "putian": 118,
@@ -164,7 +166,7 @@ class CityCodeMapper:
         "南平": 122, "nanping": 122,
         "龙岩": 123, "longyan": 123,
         "宁德": 124, "ningde": 124,
-        
+
         # Jiangxi Province
         "南昌": 125, "nanchang": 125,
         "景德镇": 126, "jingdezhen": 126,
@@ -177,7 +179,7 @@ class CityCodeMapper:
         "宜春": 133, "yichun_jx": 133,
         "抚州": 134, "fuzhou_jx": 134,
         "上饶": 135, "shangrao": 135,
-        
+
         # Shandong province
         "济南": 136, "jinan": 136,
         "淄博": 137, "zibo": 137,
@@ -195,7 +197,7 @@ class CityCodeMapper:
         "聊城": 149, "liaocheng": 149,
         "滨州": 150, "binzhou": 150,
         "菏泽": 151, "heze": 151,
-        
+
         # Henan Province
         "郑州": 152, "zhengzhou": 152,
         "开封": 153, "kaifeng": 153,
@@ -215,7 +217,7 @@ class CityCodeMapper:
         "周口": 167, "zhoukou": 167,
         "驻马店": 168, "zhumadian": 168,
         "济源": 169, "jiyuan": 169,
-        
+
         # Hubei Province
         "荆州": 170, "jingzhou": 170,
         "宜昌": 171, "yichang": 171,
@@ -229,7 +231,7 @@ class CityCodeMapper:
         "随州": 179, "suizhou": 179,
         "恩施": 180, "enshi": 180,
         "黄石": 181, "huangshi": 181,
-        
+
         # Hunan Province
         "株洲": 182, "zhuzhou": 182,
         "湘潭": 183, "xiangtan": 183,
@@ -244,7 +246,7 @@ class CityCodeMapper:
         "怀化": 192, "huaihua": 192,
         "娄底": 193, "loudi": 193,
         "湘西": 194, "xiangxi": 194,
-        
+
         # Guangdong Province
         "珠海": 195, "zhuhai": 195,
         "汕头": 196, "shantou": 196,
@@ -265,7 +267,7 @@ class CityCodeMapper:
         "潮州": 211, "chaozhou": 211,
         "揭阳": 212, "jieyang": 212,
         "云浮": 213, "yunfu": 213,
-        
+
         # Guangxi Zhuang Autonomous Region
         "南宁": 214, "nanning": 214,
         "柳州": 215, "liuzhou": 215,
@@ -281,13 +283,13 @@ class CityCodeMapper:
         "河池": 225, "hechi": 225,
         "来宾": 226, "laibin": 226,
         "崇左": 227, "chongzuo": 227,
-        
+
         # Hainan Province
         "海口": 228, "haikou": 228,
         "三亚": 229, "sanya": 229,
         "三沙": 230, "sansha": 230,
         "儋州": 231, "danzhou": 231,
-        
+
         # Sichuan Province
         "绵阳": 232, "mianyang": 232,
         "自贡": 233, "zigong": 233,
@@ -309,7 +311,7 @@ class CityCodeMapper:
         "阿坝": 249, "aba": 249,
         "甘孜": 250, "ganzi": 250,
         "凉山": 251, "liangshan": 251,
-        
+
         # Guizhou Province
         "贵阳": 252, "guiyang": 252,
         "六盘水": 253, "liupanshui": 253,
@@ -320,7 +322,7 @@ class CityCodeMapper:
         "黔西南": 258, "qianxinan": 258,
         "黔东南": 259, "qiandongnan": 259,
         "黔南": 260, "qiannan": 260,
-        
+
         # Yunnan Province
         "昆明": 261, "kunming": 261,
         "曲靖": 262, "qujing": 262,
@@ -338,7 +340,7 @@ class CityCodeMapper:
         "德宏": 274, "dehong": 274,
         "怒江": 275, "nujiang": 275,
         "迪庆": 276, "diqing": 276,
-        
+
         # Tibet Autonomous Region
         "拉萨": 277, "lasa": 277,
         "日喀则": 278, "rikaze": 278,
@@ -347,7 +349,7 @@ class CityCodeMapper:
         "山南": 281, "shannan": 281,
         "那曲": 282, "naqu": 282,
         "阿里": 283, "ali": 283,
-        
+
         # Shaanxi Province
         "咸阳": 284, "xianyang": 284,
         "铜川": 285, "tongchuan": 285,
@@ -357,7 +359,7 @@ class CityCodeMapper:
         "榆林": 289, "yulin_sx": 289,
         "安康": 290, "ankang": 290,
         "商洛": 291, "shangluo": 291,
-        
+
         # Gansu Province
         "兰州": 292, "lanzhou": 292,
         "嘉峪关": 293, "jiayuguan": 293,
@@ -373,7 +375,7 @@ class CityCodeMapper:
         "陇南": 303, "longnan": 303,
         "临夏": 304, "linxia": 304,
         "甘南": 305, "gannan": 305,
-        
+
         # Qinghai Province
         "西宁": 306, "xining": 306,
         "海东": 307, "haidong": 307,
@@ -383,14 +385,14 @@ class CityCodeMapper:
         "果洛": 311, "guoluo": 311,
         "玉树": 312, "yushu": 312,
         "海西": 313, "haixi": 313,
-        
+
         # Ningxia Hui Autonomous Region
         "银川": 314, "yinchuan": 314,
         "石嘴山": 315, "shizuishan": 315,
         "吴忠": 316, "wuzhong": 316,
         "固原": 317, "guyuan": 317,
         "中卫": 318, "zhongwei": 318,
-        
+
         # Xinjiang Uygur Autonomous Region
         "乌鲁木齐": 319, "urumqi": 319,
         "克拉玛依": 320, "karamay": 320,
@@ -406,7 +408,7 @@ class CityCodeMapper:
         "伊犁": 330, "ili": 330,
         "塔城": 331, "tacheng": 331,
         "阿勒泰": 332, "altay": 332,
-        
+
         # Special Administrative Regions
         "香港": 333, "hongkong": 333,
         "澳门": 334, "macau": 334,
@@ -417,146 +419,186 @@ class CityCodeMapper:
         "新竹": 339, "hsinchu": 339,
         "嘉义": 340, "chiayi": 340,
     }
-    
+
     @classmethod
     def get_city_code(cls, city_name: str) -> int:
+        """根据城市名称获取城市代码
+
+        Args:
+            city_name: 城市名称（中文或英文）
+
+        Returns:
+            城市代码，未找到时返回999
+        """
         if not city_name:
             return 999
-        
+
         city_name_clean = city_name.strip()
-        
+
         if city_name_clean in cls.CITY_MAPPING:
             return cls.CITY_MAPPING[city_name_clean]
-        
+
         city_name_lower = city_name_clean.lower()
         if city_name_lower in cls.CITY_MAPPING:
             return cls.CITY_MAPPING[city_name_lower]
-        
+
         for key in cls.CITY_MAPPING:
             if city_name_clean in key or key in city_name_clean:
                 return cls.CITY_MAPPING[key]
-        
+
         return 999
 
 
 class FinshDataSender:
     """Finsh协议数据发送器 - 支持延迟发送"""
-    
-    def __init__(self, serial_assistant, hardware_monitor=None, weather_api=None):
-        self.serial_assistant = serial_assistant
-        self.hardware_monitor = hardware_monitor
-        self.weather_api = weather_api
-        
-        self.enabled = False
-        self.send_time_data = True
-        self.send_api_data = True
-        self.send_performance_data = True
-        
-        self.intervals = {
+
+    def __init__(
+        self,
+        serial_assistant: Any,
+        hardware_monitor: Any | None = None,
+        weather_api: Any | None = None
+    ) -> None:
+        """初始化数据发送器
+
+        Args:
+            serial_assistant: 串口助手实例
+            hardware_monitor: 硬件监控器实例（可选）
+            weather_api: 天气API实例（可选）
+        """
+        self.serial_assistant: Any = serial_assistant
+        self.hardware_monitor: Any | None = hardware_monitor
+        self.weather_api: Any | None = weather_api
+
+        self.enabled: bool = False
+        self.send_time_data: bool = True
+        self.send_api_data: bool = True
+        self.send_performance_data: bool = True
+
+        self.intervals: dict[DataCategory, float] = {
             DataCategory.TIME: 1.0,
             DataCategory.API: 300.0,
             DataCategory.PERFORMANCE: 1.0
         }
-        
-        # 初始延迟配置（秒）
-        self.initial_delays = {
-            DataCategory.TIME: 0.0,        # 时间数据立即发送
-            DataCategory.API: 5.0,         # 天气数据延迟5秒发送
-            DataCategory.PERFORMANCE: 0.0  # 性能数据立即发送
+
+        self.initial_delays: dict[DataCategory, float] = {
+            DataCategory.TIME: 0.0,
+            DataCategory.API: 5.0,
+            DataCategory.PERFORMANCE: 0.0
         }
-        
-        self.min_command_interval = 10
-        
-        self.stop_event = threading.Event()
-        self.sender_threads = {}
-        
-        self.data_providers = {
+
+        self.min_command_interval: int = 10
+
+        self.stop_event: threading.Event = threading.Event()
+        self.sender_threads: dict[DataCategory, threading.Thread] = {}
+
+        self.data_providers: dict[
+            DataCategory, Callable[[], dict[str, Any]]
+        ] = {
             DataCategory.TIME: self._get_time_data,
             DataCategory.API: self._get_api_data,
             DataCategory.PERFORMANCE: self._get_performance_data
         }
-        
-        self.stats = {
+
+        self.stats: dict[str, Any] = {
             'commands_sent': 0,
             'errors': 0,
             'last_send_time': None
         }
-    
-    def set_api_initial_delay(self, delay_seconds: float):
+
+    def set_api_initial_delay(self, delay_seconds: float) -> None:
         """设置天气数据的初始发送延迟
-        
+
         Args:
             delay_seconds: 延迟秒数
         """
         self.initial_delays[DataCategory.API] = max(0.0, delay_seconds)
-    
-    def set_initial_delay(self, category: DataCategory, delay_seconds: float):
+
+    def set_initial_delay(
+        self,
+        category: DataCategory,
+        delay_seconds: float
+    ) -> None:
         """设置指定类型数据的初始发送延迟
-        
+
         Args:
             category: 数据类型
             delay_seconds: 延迟秒数
         """
         self.initial_delays[category] = max(0.0, delay_seconds)
-        
-    def start(self):
+
+    def start(self) -> bool:
+        """启动数据发送
+
+        Returns:
+            启动是否成功
+        """
         if self.enabled:
             return True
-            
+
         if not self.serial_assistant or not self.serial_assistant.is_connected:
             return False
-            
+
         self.enabled = True
         self.stop_event.clear()
-        
+
         try:
             if self.send_time_data:
                 self._start_sender_thread(DataCategory.TIME)
-                
+
             if self.send_api_data:
                 self._start_sender_thread(DataCategory.API)
-                
+
             if self.send_performance_data:
                 self._start_sender_thread(DataCategory.PERFORMANCE)
-                
+
             return True
         except Exception:
             self.enabled = False
             return False
-            
-    def stop(self):
+
+    def stop(self) -> None:
+        """停止数据发送"""
         if not self.enabled:
             return
-            
+
         self.enabled = False
         self.stop_event.set()
-        
+
         for thread in self.sender_threads.values():
             if thread and thread.is_alive():
                 thread.join(timeout=2)
-                
+
         self.sender_threads.clear()
-        
-    def _start_sender_thread(self, category: DataCategory):
+
+    def _start_sender_thread(self, category: DataCategory) -> None:
+        """启动指定类别的发送线程
+
+        Args:
+            category: 数据类别
+        """
         if category in self.sender_threads:
             return
-            
+
         thread = threading.Thread(
             target=self._sender_worker,
             args=(category,),
             daemon=True,
             name=f"FinshSender-{category.value}"
         )
-        
+
         self.sender_threads[category] = thread
         thread.start()
-        
-    def _sender_worker(self, category: DataCategory):
-        """发送工作线程 - 支持初始延迟"""
+
+    def _sender_worker(self, category: DataCategory) -> None:
+        """发送工作线程 - 支持初始延迟
+
+        Args:
+            category: 数据类别
+        """
         interval = self.intervals[category]
         data_provider = self.data_providers[category]
         initial_delay = self.initial_delays.get(category, 0.0)
-        
+
         # 初始延迟（可被stop_event中断）
         if initial_delay > 0:
             # 分段等待，以便能够响应stop信号
@@ -565,41 +607,47 @@ class FinshDataSender:
                 sleep_time = min(0.1, delay_remaining)
                 time.sleep(sleep_time)
                 delay_remaining -= sleep_time
-            
+
             # 如果在延迟期间被停止，直接退出
             if self.stop_event.is_set():
                 return
-        
+
         # 首次发送
         try:
             data_dict = data_provider()
             self._send_data_dict(data_dict)
         except Exception:
             self.stats['errors'] += 1
-        
+
         last_send = time.time()
-        
+
         # 周期性发送
         while not self.stop_event.is_set():
             try:
                 current_time = time.time()
-                
+
                 if current_time - last_send >= interval:
                     data_dict = data_provider()
                     if data_dict:
                         self._send_data_dict(data_dict)
                         last_send = current_time
-                
+
                 time.sleep(min(0.1, interval / 10))
-                
+
             except Exception:
                 self.stats['errors'] += 1
                 time.sleep(1)
-                
-    def _send_data_dict(self, data_dict: Dict[str, Any]):
-        if not data_dict or not self.serial_assistant or not self.serial_assistant.is_connected:
+
+    def _send_data_dict(self, data_dict: dict[str, Any]) -> None:
+        """发送数据字典
+
+        Args:
+            data_dict: 要发送的数据字典
+        """
+        if (not data_dict or not self.serial_assistant
+                or not self.serial_assistant.is_connected):
             return
-            
+
         for key, value in data_dict.items():
             if value is not None:
                 try:
@@ -609,8 +657,17 @@ class FinshDataSender:
                         time.sleep(self.min_command_interval / 1000.0)
                 except Exception:
                     self.stats['errors'] += 1
-                    
+
     def _format_command(self, key: str, value: Any) -> str:
+        """格式化命令字符串
+
+        Args:
+            key: 命令键
+            value: 命令值
+
+        Returns:
+            格式化后的命令字符串
+        """
         if isinstance(value, str):
             return f'sys_set {key} "{value}"\n'
         elif isinstance(value, (int, float)):
@@ -620,8 +677,13 @@ class FinshDataSender:
                 return f'sys_set {key} {value}\n'
         else:
             return f'sys_set {key} "{str(value)}"\n'
-            
-    def _send_command(self, command: str):
+
+    def _send_command(self, command: str) -> None:
+        """发送命令
+
+        Args:
+            command: 要发送的命令字符串
+        """
         if self.serial_assistant and self.serial_assistant.is_connected:
             success = self.serial_assistant.send_data(command)
             if success:
@@ -629,40 +691,54 @@ class FinshDataSender:
                 self.stats['last_send_time'] = datetime.now()
             else:
                 self.stats['errors'] += 1
-                
-    def _get_time_data(self) -> Dict[str, Any]:
+
+    def _get_time_data(self) -> dict[str, Any]:
+        """获取时间数据
+
+        Returns:
+            包含时间、日期、星期的字典
+        """
         now = datetime.now()
-        weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        
+        weekdays = [
+            'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+            'Friday', 'Saturday', 'Sunday'
+        ]
+
         return {
             'time': now.strftime('%H:%M:%S'),
             'date': now.strftime('%Y-%m-%d'),
             'weekday': weekdays[now.weekday()]
         }
-        
-    def _get_api_data(self) -> Dict[str, Any]:
-        data = {}
-        
+
+    def _get_api_data(self) -> dict[str, Any]:
+        """获取API数据（天气等）
+
+        Returns:
+            API数据字典
+        """
+        data: dict[str, Any] = {}
+
         if self.weather_api:
             try:
                 weather_data = self.weather_api.get_weather_data()
                 if weather_data.get('success', False):
                     icon_code = weather_data.get('icon_code', '999')
-                    
+
                     try:
                         weather_code_int = int(icon_code)
-                    except:
+                    except ValueError:
                         weather_code_int = 999
-                    
+
                     # 实时天气数据
+                    city_name = weather_data.get('city_name', '')
                     data.update({
                         'temp': int(round(weather_data.get('temperature', 0))),
                         'weather_code': weather_code_int,
                         'humidity': int(weather_data.get('humidity', 0)),
                         'pressure': int(weather_data.get('pressure', 0)),
-                        'city_code': CityCodeMapper.get_city_code(weather_data.get('city_name', ''))
+                        'city_code': CityCodeMapper.get_city_code(city_name)
                     })
-                    
+
                     # 天气预报数据 (今天、明天、后天三天)
                     forecast_list = weather_data.get('forecast', [])
                     if forecast_list and len(forecast_list) >= 3:
@@ -670,122 +746,100 @@ class FinshDataSender:
                         day0 = forecast_list[0]
                         data.update({
                             'forecast_day0_text': day0.get('text_day', ''),
-                            'forecast_day0_temp_max': int(day0.get('temp_max', 0)),
-                            'forecast_day0_temp_min': int(day0.get('temp_min', 0)),
-                            'forecast_day0_wind_dir': day0.get('wind_dir_day', ''),
-                            'forecast_day0_wind_scale': day0.get('wind_scale_day', '')
+                            'forecast_day0_temp_max': int(
+                                day0.get('temp_max', 0)),
+                            'forecast_day0_temp_min': int(
+                                day0.get('temp_min', 0)),
+                            'forecast_day0_wind_dir': day0.get(
+                                'wind_dir_day', ''),
+                            'forecast_day0_wind_scale': day0.get(
+                                'wind_scale_day', '')
                         })
-                        
+
                         # 明天的预报
                         day1 = forecast_list[1]
                         data.update({
                             'forecast_day1_text': day1.get('text_day', ''),
-                            'forecast_day1_temp_max': int(day1.get('temp_max', 0)),
-                            'forecast_day1_temp_min': int(day1.get('temp_min', 0)),
-                            'forecast_day1_wind_dir': day1.get('wind_dir_day', ''),
-                            'forecast_day1_wind_scale': day1.get('wind_scale_day', '')
+                            'forecast_day1_temp_max': int(
+                                day1.get('temp_max', 0)),
+                            'forecast_day1_temp_min': int(
+                                day1.get('temp_min', 0)),
+                            'forecast_day1_wind_dir': day1.get(
+                                'wind_dir_day', ''),
+                            'forecast_day1_wind_scale': day1.get(
+                                'wind_scale_day', '')
                         })
-                        
+
                         # 后天的预报
                         day2 = forecast_list[2]
                         data.update({
                             'forecast_day2_text': day2.get('text_day', ''),
-                            'forecast_day2_temp_max': int(day2.get('temp_max', 0)),
-                            'forecast_day2_temp_min': int(day2.get('temp_min', 0)),
-                            'forecast_day2_wind_dir': day2.get('wind_dir_day', ''),
-                            'forecast_day2_wind_scale': day2.get('wind_scale_day', '')
+                            'forecast_day2_temp_max': int(
+                                day2.get('temp_max', 0)),
+                            'forecast_day2_temp_min': int(
+                                day2.get('temp_min', 0)),
+                            'forecast_day2_wind_dir': day2.get(
+                                'wind_dir_day', ''),
+                            'forecast_day2_wind_scale': day2.get(
+                                'wind_scale_day', '')
                         })
-                        
+
             except Exception:
                 pass
-                
+
         return data
-        
-    def _get_performance_data(self) -> Dict[str, Any]:
+
+    def _get_performance_data(self) -> dict[str, Any]:
+        """获取性能数据
+
+        Returns:
+            性能数据字典
+        """
         if not self.hardware_monitor:
             return {}
-            
-        data = {}
-        
+
+        data: dict[str, Any] = {}
+
         try:
             cpu_data = self.hardware_monitor.get_cpu_data()
             data['cpu'] = float(cpu_data.get('usage', 0) or 0)
             data['cpu_temp'] = float(cpu_data.get('temp', 0) or 0)
-            
+
             mem_data = self.hardware_monitor.get_memory_data()
             data['mem'] = float(mem_data.get('percent', 0) or 0)
-            
+
             gpu_data = self.hardware_monitor.get_gpu_data(0)
             data['gpu'] = float(gpu_data.get('util', 0) or 0)
             data['gpu_temp'] = float(gpu_data.get('temp', 0) or 0)
-            
+
             net_data = self.hardware_monitor.get_network_data()
             net_up = net_data.get('up', 0) or 0
             net_down = net_data.get('down', 0) or 0
-            data['net_up'] = round(net_up / (1024 * 1024), 2) if net_up else 0.0
-            data['net_down'] = round(net_down / (1024 * 1024), 2) if net_down else 0.0
-            
+            data['net_up'] = round(
+                net_up / (1024 * 1024), 2) if net_up else 0.0
+            data['net_down'] = round(
+                net_down / (1024 * 1024), 2) if net_down else 0.0
+
         except Exception:
             pass
-            
+
         return data
-        
-    def send_test_sequence(self):
-        if not self.serial_assistant or not self.serial_assistant.is_connected:
-            return False
-        
-        test_commands = [
-            'sys_set time "12:34:56"',
-            'sys_set date "2025-08-27"',
-            'sys_set weekday "Tuesday"',
-            'sys_set temp 25',
-            'sys_set weather_code 100',
-            'sys_set humidity 65',
-            'sys_set pressure 1013',
-            'sys_set city_code 0',
-            'sys_set forecast_day0_text "晴"',
-            'sys_set forecast_day0_temp_max 28',
-            'sys_set forecast_day0_temp_min 18',
-            'sys_set forecast_day0_wind_dir "东南风"',
-            'sys_set forecast_day0_wind_scale "3-4"',
-            'sys_set forecast_day1_text "多云"',
-            'sys_set forecast_day1_temp_max 26',
-            'sys_set forecast_day1_temp_min 17',
-            'sys_set forecast_day1_wind_dir "东风"',
-            'sys_set forecast_day1_wind_scale "2-3"',
-            'sys_set forecast_day2_text "小雨"',
-            'sys_set forecast_day2_temp_max 24',
-            'sys_set forecast_day2_temp_min 16',
-            'sys_set forecast_day2_wind_dir "东北风"',
-            'sys_set forecast_day2_wind_scale "1-2"',
-            'sys_set cpu 45.2',
-            'sys_set cpu_temp 68.5',
-            'sys_set mem 72.1',
-            'sys_set gpu 89.3',
-            'sys_set gpu_temp 75.0',
-            'sys_set net_up 12.5',
-            'sys_set net_down 45.8'
-        ]
-        
-        success_count = 0
-        for cmd in test_commands:
-            try:
-                command = cmd + '\n'
-                success = self.serial_assistant.send_data(command)
-                if success:
-                    success_count += 1
-                
-                time.sleep(self.min_command_interval / 1000.0)
-                
-            except Exception:
-                pass
-                
-        return success_count == len(test_commands)
-        
-    def get_status(self) -> Dict[str, Any]:
+
+    def get_status(self) -> dict[str, Any]:
+        """获取发送器状态
+
+        Returns:
+            状态信息字典
+        """
+        is_connected = False
+        if self.serial_assistant:
+            is_connected = self.serial_assistant.is_connected
+        active_count = len([
+            t for t in self.sender_threads.values() if t and t.is_alive()
+        ])
         return {
             'enabled': self.enabled,
-            'connected': self.serial_assistant.is_connected if self.serial_assistant else False,
+            'connected': is_connected,
             'send_time_data': self.send_time_data,
             'send_api_data': self.send_api_data,
             'send_performance_data': self.send_performance_data,
@@ -793,10 +847,15 @@ class FinshDataSender:
             'initial_delays': dict(self.initial_delays),
             'min_command_interval': self.min_command_interval,
             'stats': dict(self.stats),
-            'active_threads': len([t for t in self.sender_threads.values() if t and t.is_alive()])
+            'active_threads': active_count
         }
-        
-    def get_configuration(self) -> Dict[str, Any]:
+
+    def get_configuration(self) -> dict[str, Any]:
+        """获取发送器配置
+
+        Returns:
+            配置信息字典
+        """
         return {
             'enabled': self.enabled,
             'send_time_data': self.send_time_data,
@@ -808,6 +867,7 @@ class FinshDataSender:
             'api_initial_delay': self.initial_delays[DataCategory.API],
             'min_command_interval': self.min_command_interval
         }
-        
-    def __del__(self):
+
+    def __del__(self) -> None:
+        """析构函数，确保资源释放"""
         self.stop()
