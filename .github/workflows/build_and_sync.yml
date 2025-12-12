@@ -163,8 +163,8 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          # Windows 平台安装所有依赖（包括 windows extras 和 dev 依赖）
-          uv sync --extra windows --group dev
+          # Windows 平台安装所有依赖（包括 windows extras）
+          uv sync --extra windows --all-groups
 
       - name: Run lint check
         run: |
