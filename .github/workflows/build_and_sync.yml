@@ -4,10 +4,18 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - main
+      - master
   workflow_dispatch:
     inputs:
       skip_sync:
         description: "Skip COS sync (for testing builds only)"
+        required: false
+        default: "false"
+        type: boolean
+      force_release:
+        description: "Force create release (ignore commit message check)"
         required: false
         default: "false"
         type: boolean
@@ -18,9 +26,81 @@ env:
   UV_VERSION: "0.4.0"
 
 jobs:
+  # 检测是否需要创建 release
+  check-release:
+    name: Check Release Trigger
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      app_version: ${{ steps.check.outputs.app_version }}
+      is_tag: ${{ steps.check.outputs.is_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check release conditions
+        id: check
+        run: |
+          # 检查是否是 tag 触发
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "📌 Triggered by tag: ${{ github.ref_name }}"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "is_tag=true" >> $GITHUB_OUTPUT
+            # 从 tag 名称提取版本号（去掉 v 前缀）
+            TAG_VERSION="${{ github.ref_name }}"
+            echo "app_version=${TAG_VERSION#v}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "is_tag=false" >> $GITHUB_OUTPUT
+          
+          # 检查是否手动触发并强制发布
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_release }}" == "true" ]]; then
+            echo "🚀 Force release triggered manually"
+            FORCE_RELEASE=true
+          else
+            FORCE_RELEASE=false
+          fi
+          
+          # 检查 commit message 是否包含 release（不区分大小写）
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "📝 Commit message: $COMMIT_MSG"
+          
+          if echo "$COMMIT_MSG" | grep -iq "release" || [[ "$FORCE_RELEASE" == "true" ]]; then
+            echo "✅ Release keyword found or force release enabled"
+            
+            # 从 main.py 提取 APP_VERSION
+            APP_VERSION=$(grep -oP 'APP_VERSION:\s*str\s*=\s*"\K[^"]+' main.py)
+            
+            if [[ -z "$APP_VERSION" ]]; then
+              echo "❌ Could not extract APP_VERSION from main.py"
+              exit 1
+            fi
+            
+            echo "📦 Detected APP_VERSION: $APP_VERSION"
+            
+            # 检查该版本的 tag 是否已存在
+            if git rev-parse "v$APP_VERSION" >/dev/null 2>&1; then
+              echo "⚠️ Tag v$APP_VERSION already exists, skipping release"
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            else
+              echo "✅ Tag v$APP_VERSION does not exist, will create release"
+              echo "should_release=true" >> $GITHUB_OUTPUT
+              echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "ℹ️ No release keyword in commit message, skipping release"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
   build-windows:
     name: Build Windows
+    needs: check-release
     runs-on: windows-latest
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,51 +115,120 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
-      - name: Download LibreHardwareMonitorLib.dll
+      - name: Download sftool
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # 创建 libs 目录
-          New-Item -ItemType Directory -Force -Path "libs"
+          # 从 OpenSiFli/sftool releases 下载最新的 Windows 版本
+          $SFTOOL_REPO = "OpenSiFli/sftool"
           
-          # 从 LibreHardwareMonitor releases 下载 DLL
-          $LHM_VERSION = "0.9.4"
-          $LHM_URL = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v${LHM_VERSION}/LibreHardwareMonitor-net472.zip"
+          Write-Host "Fetching latest sftool release..."
           
-          Write-Host "Downloading LibreHardwareMonitor v${LHM_VERSION}..."
-          Invoke-WebRequest -Uri $LHM_URL -OutFile "lhm.zip"
+          # 使用 GitHub API 获取最新 release 中匹配的资源
+          $releases = gh api "repos/$SFTOOL_REPO/releases/latest" | ConvertFrom-Json
+          $asset = $releases.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
           
-          # 解压并提取需要的 DLL
-          Expand-Archive -Path "lhm.zip" -DestinationPath "lhm_temp" -Force
-          
-          # 复制 DLL 到 libs 目录
-          Copy-Item "lhm_temp\LibreHardwareMonitorLib.dll" -Destination "libs\"
-          Copy-Item "lhm_temp\HidSharp.dll" -Destination "libs\" -ErrorAction SilentlyContinue
-          
-          # 验证文件存在
-          if (Test-Path "libs\LibreHardwareMonitorLib.dll") {
-              Write-Host "✅ LibreHardwareMonitorLib.dll downloaded successfully"
-              Get-ChildItem "libs"
-          } else {
-              Write-Error "❌ Failed to download LibreHardwareMonitorLib.dll"
+          if (-not $asset) {
+              Write-Error "❌ No matching sftool asset found for x86_64-pc-windows-msvc"
               exit 1
           }
           
-          # 清理临时文件
-          Remove-Item "lhm.zip" -Force
-          Remove-Item "lhm_temp" -Recurse -Force
+          $downloadUrl = $asset.browser_download_url
+          $fileName = $asset.name
+          
+          Write-Host "Downloading: $fileName"
+          Write-Host "URL: $downloadUrl"
+          
+          # 下载文件
+          Invoke-WebRequest -Uri $downloadUrl -OutFile $fileName
+          
+          # 解压到工作目录
+          Write-Host "Extracting to working directory..."
+          Expand-Archive -Path $fileName -DestinationPath "." -Force
+          
+          # 验证 sftool.exe 存在
+          if (Test-Path "sftool.exe") {
+              Write-Host "✅ sftool.exe downloaded successfully"
+              Get-Item "sftool.exe" | Select-Object Name, Length
+          } else {
+              Write-Error "❌ sftool.exe not found after extraction"
+              Get-ChildItem "."
+              exit 1
+          }
+          
+          # 清理压缩包
+          Remove-Item $fileName -Force
 
       - name: Install dependencies
+        shell: pwsh
         run: |
-          uv sync --all-extras
+          # Windows 平台安装所有依赖（包括 windows extras 和 dev 依赖）
+          uv sync --extra windows --group dev
 
       - name: Run lint check
         run: |
           uv run ruff check . --select=E,F
         continue-on-error: true
 
+      - name: Extract version and create version JSON
+        id: version
+        shell: pwsh
+        run: |
+          # 从 main.py 提取 APP_VERSION
+          $versionMatch = Select-String -Path "main.py" -Pattern 'APP_VERSION:\s*str\s*=\s*"([^"]+)"'
+          if ($versionMatch) {
+              $appVersion = $versionMatch.Matches.Groups[1].Value
+              Write-Host "✅ Detected APP_VERSION: $appVersion"
+          } else {
+              Write-Error "❌ Could not find APP_VERSION in main.py"
+              exit 1
+          }
+          
+          # 从 main.py 提取 FIRMWARE_COMPAT（可选）
+          $firmwareMatch = Select-String -Path "main.py" -Pattern 'FIRMWARE_COMPAT:\s*str\s*=\s*"([^"]+)"'
+          $firmwareCompat = ""
+          if ($firmwareMatch) {
+              $firmwareCompat = $firmwareMatch.Matches.Groups[1].Value
+              Write-Host "✅ Detected FIRMWARE_COMPAT: $firmwareCompat"
+          }
+          
+          # 获取当前时间戳
+          $buildTime = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+          
+          # 创建版本 JSON 文件
+          $versionInfo = @{
+              version = $appVersion
+              firmware_compat = $firmwareCompat
+              build_time = $buildTime
+              tag = "v$appVersion"
+              commit = "${{ github.sha }}"
+              download_url = "https://github.com/${{ github.repository }}/releases/download/v$appVersion/"
+          }
+          
+          $jsonContent = $versionInfo | ConvertTo-Json -Depth 10
+          $jsonContent | Out-File -FilePath "hub_verid.json" -Encoding UTF8
+          
+          Write-Host "✅ Created hub_verid.json:"
+          Get-Content "hub_verid.json"
+          
+          # 设置输出变量供后续步骤使用
+          echo "app_version=$appVersion" >> $env:GITHUB_OUTPUT
+
       - name: Build with PyInstaller
         run: |
           uv run python build.py --no-installer
+          
+      - name: Copy sftool.exe to dist
+        shell: pwsh
+        run: |
+          # 将 sftool.exe 复制到构建输出目录
+          if (Test-Path "sftool.exe") {
+              Copy-Item "sftool.exe" -Destination "dist\${{ env.APP_NAME }}\" -Force
+              Write-Host "✅ sftool.exe copied to dist folder"
+          } else {
+              Write-Warning "⚠️ sftool.exe not found in working directory"
+          }
 
       - name: Verify build output
         shell: pwsh
@@ -92,11 +241,12 @@ jobs:
               exit 1
           }
           
-          # 验证 libs 目录被正确打包
-          if (Test-Path "dist\${{ env.APP_NAME }}\libs\LibreHardwareMonitorLib.dll") {
-              Write-Host "✅ LibreHardwareMonitorLib.dll included in build"
+          # 验证 sftool.exe 在构建输出中
+          if (Test-Path "dist\${{ env.APP_NAME }}\sftool.exe") {
+              Write-Host "✅ sftool.exe included in build"
           } else {
-              Write-Warning "⚠️ LibreHardwareMonitorLib.dll not found in build output"
+              Write-Error "❌ sftool.exe not found in build output"
+              exit 1
           }
 
       - name: Install NSIS
@@ -110,7 +260,7 @@ jobs:
       - name: Verify installer
         shell: pwsh
         run: |
-          $version = (Select-String -Path "pyproject.toml" -Pattern 'version = "(.+)"').Matches.Groups[1].Value
+          $version = "${{ steps.version.outputs.app_version }}"
           $installerPath = "dist\${{ env.APP_NAME }}-${version}-Setup.exe"
           
           if (Test-Path $installerPath) {
@@ -124,11 +274,19 @@ jobs:
       - name: Create portable ZIP
         shell: pwsh
         run: |
-          $version = (Select-String -Path "pyproject.toml" -Pattern 'version = "(.+)"').Matches.Groups[1].Value
+          $version = "${{ steps.version.outputs.app_version }}"
           $zipName = "${{ env.APP_NAME }}-${version}-Windows-Portable.zip"
           
           Compress-Archive -Path "dist\${{ env.APP_NAME }}\*" -DestinationPath "dist\$zipName"
           Write-Host "✅ Portable ZIP created: dist\$zipName"
+
+      - name: Copy version JSON to dist
+        shell: pwsh
+        run: |
+          # 将版本 JSON 文件复制到 dist 目录
+          Copy-Item "hub_verid.json" -Destination "dist\" -Force
+          Write-Host "✅ hub_verid.json copied to dist folder"
+          Get-Content "dist\hub_verid.json"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -137,15 +295,16 @@ jobs:
           path: |
             dist/*.exe
             dist/*.zip
+            dist/hub_verid.json
           retention-days: 7
 
   sync-to-cos:
     name: Sync to Tencent COS
-    needs: [build-windows]
+    needs: [check-release, build-windows]
     runs-on: ubuntu-latest
     if: |
-      (startsWith(github.ref, 'refs/tags/') && github.event_name != 'pull_request') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_sync != 'true')
+      needs.check-release.outputs.should_release == 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.skip_sync != 'true')
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -165,31 +324,57 @@ jobs:
           secret_key: ${{ secrets.COS_SECRET_KEY }}
           region: ${{ secrets.COS_REGION }}
           bucket: ${{ secrets.COS_BUCKET }}
-          prefix: github_assets/${{ github.repository }}/releases/download/${{ github.ref_name }}/
+          prefix: github_assets/${{ github.repository }}/releases/download/v${{ needs.check-release.outputs.app_version }}/
           artifacts: artifacts/
           delete_remote: true
-          flush_url: ${{ secrets.COS_CDN_URL }}github_assets/${{ github.repository }}/releases/download/${{ github.ref_name }}/
+          flush_url: ${{ secrets.COS_CDN_URL }}github_assets/${{ github.repository }}/releases/download/v${{ needs.check-release.outputs.app_version }}/
 
   create-release:
-    name: Create GitHub Release
-    needs: [build-windows, sync-to-cos]
+    name: Create Tag and GitHub Release
+    needs: [check-release, build-windows, sync-to-cos]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: needs.check-release.outputs.should_release == 'true'
     permissions:
       contents: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
+      - name: Create tag if not exists
+        if: needs.check-release.outputs.is_tag != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="v${{ needs.check-release.outputs.app_version }}"
+          
+          # 检查 tag 是否已存在
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ Tag $TAG_NAME already exists"
+          else
+            echo "🏷️ Creating tag: $TAG_NAME"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+            git push origin "$TAG_NAME"
+            echo "✅ Tag $TAG_NAME created and pushed"
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.check-release.outputs.app_version }}
+          name: Release v${{ needs.check-release.outputs.app_version }}
           files: artifacts/*
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
+          prerelease: ${{ contains(needs.check-release.outputs.app_version, '-alpha') || contains(needs.check-release.outputs.app_version, '-beta') || contains(needs.check-release.outputs.app_version, '-rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
