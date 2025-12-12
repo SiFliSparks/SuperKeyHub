@@ -1,0 +1,195 @@
+name: Build and Sync to COS
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      skip_sync:
+        description: "Skip COS sync (for testing builds only)"
+        required: false
+        default: "false"
+        type: boolean
+
+env:
+  APP_NAME: SuperKeyHUB
+  PYTHON_VERSION: "3.11"
+  UV_VERSION: "0.4.0"
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Download LibreHardwareMonitorLib.dll
+        shell: pwsh
+        run: |
+          # 创建 libs 目录
+          New-Item -ItemType Directory -Force -Path "libs"
+          
+          # 从 LibreHardwareMonitor releases 下载 DLL
+          $LHM_VERSION = "0.9.4"
+          $LHM_URL = "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/download/v${LHM_VERSION}/LibreHardwareMonitor-net472.zip"
+          
+          Write-Host "Downloading LibreHardwareMonitor v${LHM_VERSION}..."
+          Invoke-WebRequest -Uri $LHM_URL -OutFile "lhm.zip"
+          
+          # 解压并提取需要的 DLL
+          Expand-Archive -Path "lhm.zip" -DestinationPath "lhm_temp" -Force
+          
+          # 复制 DLL 到 libs 目录
+          Copy-Item "lhm_temp\LibreHardwareMonitorLib.dll" -Destination "libs\"
+          Copy-Item "lhm_temp\HidSharp.dll" -Destination "libs\" -ErrorAction SilentlyContinue
+          
+          # 验证文件存在
+          if (Test-Path "libs\LibreHardwareMonitorLib.dll") {
+              Write-Host "✅ LibreHardwareMonitorLib.dll downloaded successfully"
+              Get-ChildItem "libs"
+          } else {
+              Write-Error "❌ Failed to download LibreHardwareMonitorLib.dll"
+              exit 1
+          }
+          
+          # 清理临时文件
+          Remove-Item "lhm.zip" -Force
+          Remove-Item "lhm_temp" -Recurse -Force
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Run lint check
+        run: |
+          uv run ruff check . --select=E,F
+        continue-on-error: true
+
+      - name: Build with PyInstaller
+        run: |
+          uv run python build.py --no-installer
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          if (Test-Path "dist\${{ env.APP_NAME }}\${{ env.APP_NAME }}.exe") {
+              Write-Host "✅ Build successful"
+              Get-ChildItem "dist\${{ env.APP_NAME }}" | Select-Object Name, Length
+          } else {
+              Write-Error "❌ Build failed - exe not found"
+              exit 1
+          }
+          
+          # 验证 libs 目录被正确打包
+          if (Test-Path "dist\${{ env.APP_NAME }}\libs\LibreHardwareMonitorLib.dll") {
+              Write-Host "✅ LibreHardwareMonitorLib.dll included in build"
+          } else {
+              Write-Warning "⚠️ LibreHardwareMonitorLib.dll not found in build output"
+          }
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y
+
+      - name: Build NSIS Installer
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path "pyproject.toml" -Pattern 'version = "(.+)"').Matches.Groups[1].Value
+          $installerPath = "dist\${{ env.APP_NAME }}-${version}-Setup.exe"
+          
+          if (Test-Path $installerPath) {
+              Write-Host "✅ Installer created: $installerPath"
+              Get-Item $installerPath | Select-Object Name, Length
+          } else {
+              Write-Warning "⚠️ Installer not found at expected path"
+              Get-ChildItem "dist" -Filter "*.exe"
+          }
+
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path "pyproject.toml" -Pattern 'version = "(.+)"').Matches.Groups[1].Value
+          $zipName = "${{ env.APP_NAME }}-${version}-Windows-Portable.zip"
+          
+          Compress-Archive -Path "dist\${{ env.APP_NAME }}\*" -DestinationPath "dist\$zipName"
+          Write-Host "✅ Portable ZIP created: dist\$zipName"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            dist/*.exe
+            dist/*.zip
+          retention-days: 7
+
+  sync-to-cos:
+    name: Sync to Tencent COS
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    if: |
+      (startsWith(github.ref, 'refs/tags/') && github.event_name != 'pull_request') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.skip_sync != 'true')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: |
+          echo "📦 Downloaded artifacts:"
+          find artifacts -type f -exec ls -lh {} \;
+
+      - name: Upload to COS
+        uses: OpenSiFli/SiFliMirrorSync@v1
+        with:
+          secret_id: ${{ secrets.COS_SECRET_ID }}
+          secret_key: ${{ secrets.COS_SECRET_KEY }}
+          region: ${{ secrets.COS_REGION }}
+          bucket: ${{ secrets.COS_BUCKET }}
+          prefix: github_assets/${{ github.repository }}/releases/download/${{ github.ref_name }}/
+          artifacts: artifacts/
+          delete_remote: true
+          flush_url: ${{ secrets.COS_CDN_URL }}github_assets/${{ github.repository }}/releases/download/${{ github.ref_name }}/
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build-windows, sync-to-cos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-alpha') || contains(github.ref, '-beta') || contains(github.ref, '-rc') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
