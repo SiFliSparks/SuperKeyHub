@@ -75,13 +75,13 @@ def print_header(msg: str) -> None:
 # ============================================================================
 def install_deps() -> int:
     """安装项目依赖"""
-    print_header("📦 安装项目依赖")
+    print_header("[PKG] 安装项目依赖")
     return run_cmd(["uv", "sync"])
 
 
 def install_dev_deps() -> int:
     """安装开发依赖"""
-    print_header("📦 安装开发依赖")
+    print_header("[PKG] 安装开发依赖")
     return run_cmd(["uv", "sync", "--all-extras"])
 
 
@@ -90,7 +90,7 @@ def install_dev_deps() -> int:
 # ============================================================================
 def lint_code(fix: bool = False) -> bool:
     """运行 ruff lint 检查"""
-    print_header("🔍 运行 Ruff lint 检查")
+    print_header("[CHECK] 运行 Ruff lint 检查")
 
     if fix:
         run_cmd(["uv", "run", "ruff", "check", "--fix", "."])
@@ -98,43 +98,43 @@ def lint_code(fix: bool = False) -> bool:
     # 只检查 error 级别 (E, F)
     result = run_cmd(["uv", "run", "ruff", "check", ".", "--select=E,F"])
     if result != 0:
-        print("❌ Lint 检查失败 (存在 error)")
+        print("[FAIL] Lint 检查失败 (存在 error)")
         return False
-    print("✅ Lint 检查通过")
+    print("[OK] Lint 检查通过")
     return True
 
 
 def lint_all() -> bool:
     """运行完整 lint 检查（包括 warning）"""
-    print_header("🔍 运行完整 Ruff lint 检查")
+    print_header("[CHECK] 运行完整 Ruff lint 检查")
     result = run_cmd(["uv", "run", "ruff", "check", "."])
     if result != 0:
-        print("⚠️  Lint 检查发现问题")
+        print("[WARN] Lint 检查发现问题")
         return False
-    print("✅ 完整 Lint 检查通过")
+    print("[OK] 完整 Lint 检查通过")
     return True
 
 
 def format_code() -> None:
     """格式化代码"""
-    print_header("📝 格式化代码")
+    print_header("[FMT] 格式化代码")
     run_cmd(["uv", "run", "ruff", "format", "."])
     run_cmd(["uv", "run", "ruff", "check", "--fix", "."])
-    print("✅ 代码格式化完成")
+    print("[OK] 代码格式化完成")
 
 
 def type_check() -> bool:
     """运行 mypy 类型检查"""
-    print_header("🔬 运行 Mypy 类型检查")
+    print_header("[TYPE] 运行 Mypy 类型检查")
     result = run_cmd([
         "uv", "run", "mypy", ".",
         "--ignore-missing-imports",
         "--no-error-summary"
     ])
     if result != 0:
-        print("⚠️  类型检查发现问题")
+        print("[WARN] 类型检查发现问题")
         return False
-    print("✅ 类型检查通过")
+    print("[OK] 类型检查通过")
     return True
 
 
@@ -143,7 +143,7 @@ def type_check() -> bool:
 # ============================================================================
 def run_app(minimized: bool = False) -> int:
     """运行应用"""
-    print_header("🚀 运行应用")
+    print_header("[BUILD] 运行应用")
     cmd = ["uv", "run", "python", "main.py"]
     if minimized:
         cmd.append("--minimized")
@@ -155,7 +155,7 @@ def run_app(minimized: bool = False) -> int:
 # ============================================================================
 def clean_build() -> None:
     """清理构建目录"""
-    print_header("🧹 清理构建目录")
+    print_header("[CLEAN] 清理构建目录")
 
     dirs_to_clean = [
         BUILD_DIR,
@@ -184,7 +184,7 @@ def clean_build() -> None:
     for pyc in PROJECT_ROOT.rglob("*.pyc"):
         pyc.unlink()
 
-    print("✅ 清理完成")
+    print("[OK] 清理完成")
 
 
 # ============================================================================
@@ -192,7 +192,7 @@ def clean_build() -> None:
 # ============================================================================
 def build_pyinstaller() -> bool:
     """使用 PyInstaller 构建可执行文件"""
-    print_header(f"🔨 构建 {APP_NAME}")
+    print_header(f"[BUILD] 构建 {APP_NAME}")
 
     # 基础参数
     args: list[str] = [
@@ -252,10 +252,10 @@ def build_pyinstaller() -> bool:
 
     result = run_cmd(args)
     if result != 0:
-        print("❌ PyInstaller 构建失败")
+        print("[FAIL] PyInstaller 构建失败")
         return False
 
-    print("✅ PyInstaller 构建成功")
+    print("[OK] PyInstaller 构建成功")
     return True
 
 
@@ -264,12 +264,12 @@ def build_pyinstaller() -> bool:
 # ============================================================================
 def build_nsis_installer() -> bool:
     """构建 Windows NSIS 安装程序（使用项目中的 installer.nsi）"""
-    print_header("📦 构建 Windows NSIS 安装程序")
+    print_header("[PKG] 构建 Windows NSIS 安装程序")
 
     # 使用项目根目录下的 installer.nsi
     nsis_script = PROJECT_ROOT / "installer.nsi"
     if not nsis_script.exists():
-        print("❌ 未找到 installer.nsi 脚本")
+        print("[FAIL] 未找到 installer.nsi 脚本")
         print(f"   请确保 {nsis_script} 文件存在")
         return False
 
@@ -287,17 +287,17 @@ def build_nsis_installer() -> bool:
             break
 
     if not makensis:
-        print("⚠️  未找到 NSIS，跳过安装程序构建")
+        print("[WARN] 未找到 NSIS，跳过安装程序构建")
         print("   请从 https://nsis.sourceforge.io/ 下载安装 NSIS")
         return False
 
     # 运行 NSIS（从项目根目录执行，确保相对路径正确）
     result = run_cmd([makensis, str(nsis_script)], cwd=PROJECT_ROOT)
     if result != 0:
-        print("❌ NSIS 构建失败")
+        print("[FAIL] NSIS 构建失败")
         return False
 
-    print("✅ Windows 安装程序构建成功")
+    print("[OK] Windows 安装程序构建成功")
     return True
 
 
@@ -306,7 +306,7 @@ def build_nsis_installer() -> bool:
 # ============================================================================
 def build_macos_app() -> bool:
     """构建 macOS .app bundle"""
-    print_header("🍎 构建 macOS 应用")
+    print_header("[MACOS] 构建 macOS 应用")
 
     app_path = DIST_DIR / f"{APP_NAME}.app"
 
@@ -368,7 +368,7 @@ def build_macos_app() -> bool:
         if icon_src.exists():
             shutil.copy2(icon_src, resources / "app.icns")
 
-    print("✅ macOS 应用构建成功")
+    print("[OK] macOS 应用构建成功")
     return True
 
 
@@ -380,7 +380,7 @@ def build_dmg() -> bool:
     dmg_path = DIST_DIR / f"{APP_NAME}-{APP_VERSION}.dmg"
 
     if not app_path.exists():
-        print("❌ 未找到 .app 文件")
+        print("[FAIL] 未找到 .app 文件")
         return False
 
     result: int = 0
@@ -429,10 +429,10 @@ def build_dmg() -> bool:
             temp_dmg.unlink()
 
     if result != 0:
-        print("❌ DMG 构建失败")
+        print("[FAIL] DMG 构建失败")
         return False
 
-    print(f"✅ DMG 构建成功: {dmg_path}")
+    print(f"[OK] DMG 构建成功: {dmg_path}")
     return True
 
 
@@ -441,11 +441,11 @@ def build_dmg() -> bool:
 # ============================================================================
 def build_linux_appimage() -> bool:
     """构建 Linux AppImage"""
-    print_header("🐧 构建 Linux AppImage")
+    print_header("[LINUX] 构建 Linux AppImage")
 
     # 检查 appimagetool
     if not shutil.which("appimagetool"):
-        print("⚠️  未找到 appimagetool，跳过 AppImage 构建")
+        print("[WARN] 未找到 appimagetool，跳过 AppImage 构建")
         print("   请从 https://appimage.github.io/ 下载")
         return False
 
@@ -502,10 +502,10 @@ exec "$HERE/usr/bin/{APP_NAME}/{APP_NAME}" "$@"
     ])
 
     if result != 0:
-        print("❌ AppImage 构建失败")
+        print("[FAIL] AppImage 构建失败")
         return False
 
-    print(f"✅ AppImage 构建成功: {appimage_path}")
+    print(f"[OK] AppImage 构建成功: {appimage_path}")
     return True
 
 
@@ -514,7 +514,7 @@ exec "$HERE/usr/bin/{APP_NAME}/{APP_NAME}" "$@"
 # ============================================================================
 def build_all(skip_installer: bool = False) -> int:
     """完整构建流程"""
-    print_header(f"🚀 SuperKeyHUB v{APP_VERSION} 完整构建")
+    print_header(f"[BUILD] SuperKeyHUB v{APP_VERSION} 完整构建")
     print(f"   平台: {SYSTEM}")
 
     # 清理
@@ -522,7 +522,7 @@ def build_all(skip_installer: bool = False) -> int:
 
     # Lint 检查 (只检查 error)
     if not lint_code():
-        print("⚠️  Lint 检查有 error，继续构建...")
+        print("[WARN] Lint 检查有 error，继续构建...")
 
     # PyInstaller 构建
     if not build_pyinstaller():
@@ -539,7 +539,7 @@ def build_all(skip_installer: bool = False) -> int:
             build_linux_appimage()
 
     print()
-    print("🎉 构建完成!")
+    print("[DONE] 构建完成!")
     print(f"   输出目录: {DIST_DIR}")
 
     return 0
