@@ -335,7 +335,6 @@ jobs:
           prefix: github_assets/${{ github.repository }}/releases/download/v${{ needs.check-release.outputs.app_version }}/
           artifacts: artifacts/
           delete_remote: true
-          flush_url: ${{ secrets.COS_CDN_URL }}github_assets/${{ github.repository }}/releases/download/v${{ needs.check-release.outputs.app_version }}/
 
   create-release:
     name: Create Tag and GitHub Release
