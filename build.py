@@ -564,19 +564,27 @@ def build_dmg() -> bool:
 # ============================================================================
 # 完整构建流程
 # ============================================================================
-def build_all(skip_installer: bool = False) -> int:
-    """完整构建流程"""
+def build_all(skip_installer: bool = False, skip_deps: bool = False) -> int:
+    """完整构建流程
+    
+    Args:
+        skip_installer: 跳过安装程序打包
+        skip_deps: 跳过依赖安装（用于 CI 环境，依赖已预先安装）
+    """
     print_header(f"[BUILD] SuperKeyHUB v{APP_VERSION} 完整构建")
     print(f"   平台: {SYSTEM}")
 
     clean_build()
 
     # 确保依赖已安装（Windows 需要 pythonnet 和 wmi，构建需要 dev 组）
-    print_header("[PKG] 确保依赖已安装")
-    if IS_WINDOWS:
-        run_cmd(["uv", "sync", "--extra", "windows", "--group", "dev"])
+    if not skip_deps:
+        print_header("[PKG] 确保依赖已安装")
+        if IS_WINDOWS:
+            run_cmd(["uv", "sync", "--extra", "windows", "--group", "dev"])
+        else:
+            run_cmd(["uv", "sync", "--group", "dev"])
     else:
-        run_cmd(["uv", "sync", "--group", "dev"])
+        print("[SKIP] 跳过依赖安装（--skip-deps）")
 
     # 检查外部工具
     prepare_tools_dir()
@@ -639,6 +647,7 @@ def show_help() -> None:
 构建:
   --all             完整构建流程 (推荐)
   --no-installer    构建但跳过安装程序打包
+  --skip-deps       跳过依赖安装 (用于 CI 环境)
   --clean           清理构建目录
 
 其他:
@@ -681,6 +690,8 @@ def main() -> int:
     parser.add_argument("--install-native", action="store_true")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--no-installer", action="store_true")
+    parser.add_argument("--skip-deps", action="store_true",
+                        help="跳过依赖安装（用于 CI 环境）")
     parser.add_argument("--clean", action="store_true")
     parser.add_argument("--help", "-h", action="store_true")
 
@@ -731,10 +742,10 @@ def main() -> int:
         return 0 if install_macos_native_system() else 1
 
     if args.all:
-        return build_all(skip_installer=False)
+        return build_all(skip_installer=False, skip_deps=args.skip_deps)
 
     if args.no_installer:
-        return build_all(skip_installer=True)
+        return build_all(skip_installer=True, skip_deps=args.skip_deps)
 
     show_help()
     return 0

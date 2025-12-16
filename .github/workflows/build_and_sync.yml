@@ -118,12 +118,29 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          # Windows 平台安装所有依赖（包括 windows extras 和 dev 依赖组）
-          uv sync --extra windows --group dev
+          # Windows 平台安装所有依赖
+          Write-Host "[STEP 1] Installing base dependencies with windows extras..."
+          uv sync --extra windows
           
-          # 验证 pyinstaller 已安装
-          Write-Host "[CHECK] Verifying PyInstaller installation..."
+          # 安装 dev 依赖组（包含 pyinstaller）
+          Write-Host "[STEP 2] Installing dev dependencies..."
+          uv sync --group dev
+          
+          # 如果 pyinstaller 仍未安装，使用 pip 直接安装
+          Write-Host "[STEP 3] Verifying PyInstaller installation..."
+          $result = uv run python -c "import PyInstaller; print('OK')" 2>&1
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "[WARN] PyInstaller not found via uv sync, installing via pip..."
+              uv pip install pyinstaller
+          }
+          
+          # 最终验证
           uv run pyinstaller --version
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "[FAIL] PyInstaller installation failed"
+              exit 1
+          }
+          Write-Host "[OK] PyInstaller installed successfully"
 
       - name: Verify sftool in tools directory
         shell: pwsh
@@ -221,8 +238,8 @@ jobs:
           Write-Host "[DEBUG] PyInstaller version:"
           uv run python -c "import PyInstaller; print(PyInstaller.__version__)"
           
-          # 运行构建
-          uv run python build.py --no-installer
+          # 运行构建（使用 --skip-deps 因为依赖已在上一步安装）
+          uv run python build.py --no-installer --skip-deps
           
           # 如果失败，显示更多诊断信息
           if ($LASTEXITCODE -ne 0) {
