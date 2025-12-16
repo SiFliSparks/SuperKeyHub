@@ -359,6 +359,10 @@ class NavigationItem:
                 icon_color=theme.get("TEXT_SECONDARY"),
                 icon_size=icon_size,
                 tooltip=title,
+                style=ft.ButtonStyle(
+                    padding=ft.padding.all(8),
+                    alignment=ft.alignment.center,
+                ),
                 on_click=lambda e: (
                     self.on_click_handler(view_name)
                     if self.on_click_handler else None
@@ -368,9 +372,10 @@ class NavigationItem:
             # 创建 container，只包含图标按钮
             self.container = ft.Container(
                 content=self.icon_btn,
-                padding=ft.padding.symmetric(horizontal=4, vertical=4),
+                padding=0,
                 border_radius=8,
                 ink=True,
+                alignment=ft.alignment.center,
                 on_click=lambda e: (
                     self.on_click_handler(view_name)
                     if self.on_click_handler else None
@@ -2699,9 +2704,10 @@ async def main(page: ft.Page) -> None:
     nav_controls.append(ft.Container(height=8))
 
     for i, nav_item in enumerate(nav_items[:3]):
-        nav_controls.append(ft.Container(
-            content=nav_item.container,
-            padding=ft.padding.symmetric(horizontal=8, vertical=2)
+        nav_controls.append(ft.Row(
+            controls=[nav_item.container],
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ))
 
     nav_controls.append(ft.Container(expand=True))
@@ -2712,9 +2718,10 @@ async def main(page: ft.Page) -> None:
     ))
 
     for nav_item in nav_items[4:]:
-        nav_controls.append(ft.Container(
-            content=nav_item.container,
-            padding=ft.padding.symmetric(horizontal=8, vertical=2)
+        nav_controls.append(ft.Row(
+            controls=[nav_item.container],
+            alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ))
 
     nav_controls.append(ft.Container(height=8))
@@ -2724,6 +2731,7 @@ async def main(page: ft.Page) -> None:
             controls=nav_controls,
             spacing=0,
             expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         ),
         width=72,
         padding=0,
