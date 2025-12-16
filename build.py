@@ -293,17 +293,38 @@ def check_sftool() -> Path | None:
     return None
 
 
+def check_macmon() -> Path | None:
+    """检查 macmon 是否存在于 tools 目录
+    
+    macmon 是 macOS 上用于获取 Apple Silicon 性能数据的工具。
+    仅在 macOS 平台上需要。
+    
+    Returns:
+        macmon 路径，不存在或非 macOS 返回 None
+    """
+    if not IS_MACOS:
+        return None
+    
+    macmon_path = TOOLS_DIR / "macmon"
+    
+    if macmon_path.exists():
+        return macmon_path
+    return None
+
+
 def prepare_tools_dir() -> bool:
-    """准备工具目录，检查 sftool 是否存在"""
+    """准备工具目录，检查 sftool 和 macmon 是否存在"""
     print_header("[TOOLS] 检查外部工具")
     
+    all_ok = True
+    
+    # 检查 sftool（跨平台）
     sftool = check_sftool()
     if sftool:
         print(f"[OK] 找到 sftool: {sftool}")
         # macOS/Linux: 确保有执行权限
         if not IS_WINDOWS:
             os.chmod(sftool, 0o755)
-        return True
     else:
         print("[WARN] 未找到 sftool")
         print(f"   请将 sftool 放置在: {TOOLS_DIR}/")
@@ -311,7 +332,23 @@ def prepare_tools_dir() -> bool:
             print("   Windows: tools/sftool.exe")
         else:
             print("   macOS/Linux: tools/sftool")
-        return False
+        all_ok = False
+    
+    # macOS: 检查 macmon
+    if IS_MACOS:
+        macmon = check_macmon()
+        if macmon:
+            print(f"[OK] 找到 macmon: {macmon}")
+            os.chmod(macmon, 0o755)
+        else:
+            print("[WARN] 未找到 macmon（Apple Silicon 性能监控工具）")
+            print(f"   请将 macmon 放置在: {TOOLS_DIR}/macmon")
+            print("   获取方式:")
+            print("     方式1: brew install macmon && cp $(which macmon) tools/")
+            print("     方式2: 从 https://github.com/vladkens/macmon/releases 下载")
+            print("   注意: 如未打包 macmon，运行时将尝试使用系统安装版本")
+    
+    return all_ok
 
 
 # ============================================================================
@@ -397,19 +434,36 @@ def build_pyinstaller() -> bool:
         if MACOS_NATIVE_DIR.exists():
             args.extend(["--add-data", f"{MACOS_NATIVE_DIR}:macos_native"])
 
-    # ======= 新增: 打包 sftool 工具 =======
+    # ======= 打包 tools 目录中的工具 =======
     if TOOLS_DIR.exists():
+        tools_to_pack: list[tuple[str, Path]] = []
+        
+        # sftool（跨平台固件更新工具）
         sftool = check_sftool()
         if sftool:
-            # 添加 tools 目录到打包资源
-            args.extend(["--add-data", f"{TOOLS_DIR}{sep}tools"])
+            tools_to_pack.append(("sftool", sftool))
             print(f"[OK] 将打包 sftool: {sftool}")
-            
-            # macOS: 将 sftool 添加为二进制文件以保留执行权限
-            if IS_MACOS:
-                args.extend(["--add-binary", f"{sftool}:tools"])
         else:
             print("[WARN] sftool 未找到，固件更新功能将不可用")
+        
+        # macmon（仅 macOS，Apple Silicon 性能监控）
+        if IS_MACOS:
+            macmon = check_macmon()
+            if macmon:
+                tools_to_pack.append(("macmon", macmon))
+                print(f"[OK] 将打包 macmon: {macmon}")
+            else:
+                print("[INFO] macmon 未打包，运行时将尝试使用系统版本")
+        
+        # 添加 tools 目录到打包资源
+        if tools_to_pack:
+            args.extend(["--add-data", f"{TOOLS_DIR}{sep}tools"])
+            
+            # macOS: 将工具添加为二进制文件以保留执行权限
+            if IS_MACOS:
+                for tool_name, tool_path in tools_to_pack:
+                    args.extend(["--add-binary", f"{tool_path}:tools"])
+                    print(f"[OK] 已添加为二进制: {tool_name}")
 
     # 隐藏导入
     hidden_imports = [
@@ -517,11 +571,18 @@ def build_macos_app() -> bool:
         shutil.move(str(pyinstaller_app), str(app_path))
     
     if app_path.exists():
-        # 确保 tools/sftool 有执行权限
-        sftool_in_app = app_path / "Contents" / "Resources" / "tools" / "sftool"
-        if sftool_in_app.exists():
-            os.chmod(sftool_in_app, 0o755)
-            print(f"[OK] 已设置 sftool 执行权限: {sftool_in_app}")
+        # 设置 tools 目录中所有工具的执行权限
+        tools_in_app = app_path / "Contents" / "Resources" / "tools"
+        
+        if tools_in_app.exists():
+            # 需要设置执行权限的工具列表
+            executable_tools = ["sftool", "macmon"]
+            
+            for tool_name in executable_tools:
+                tool_path = tools_in_app / tool_name
+                if tool_path.exists():
+                    os.chmod(tool_path, 0o755)
+                    print(f"[OK] 已设置 {tool_name} 执行权限: {tool_path}")
         
         print(f"[OK] 应用包: {app_path}")
         return True
@@ -654,9 +715,17 @@ def show_help() -> None:
   --help, -h        显示此帮助信息
 
 外部工具:
-  构建前请将 sftool 放置在 tools/ 目录:
+  构建前请将以下工具放置在 tools/ 目录:
+  
+  sftool (固件更新工具, 跨平台):
     - Windows: tools/sftool.exe
     - macOS/Linux: tools/sftool
+  
+  macmon (仅 macOS, Apple Silicon 性能监控, 可选):
+    - macOS: tools/macmon
+    - 获取方式:
+      1. brew install macmon && cp $(which macmon) tools/
+      2. 从 https://github.com/vladkens/macmon/releases 下载
 
 示例:
   uv run python build.py --install        # 首次安装依赖

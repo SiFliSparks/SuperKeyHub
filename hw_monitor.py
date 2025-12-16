@@ -513,24 +513,61 @@ class AppleSiliconMonitor:
             self._init_ioreport()
 
     def _check_macmon(self) -> bool:
-        """检查 macmon 是否可用"""
-        # 常见的 macmon 安装路径
+        """检查 macmon 是否可用
+        
+        优先顺序：
+        1. 打包后的 tools 目录 (内置)
+        2. 开发环境 tools 目录
+        3. Homebrew 安装路径
+        4. 系统 PATH
+        """
+        import sys
+        
+        # 获取基础路径（兼容打包和开发环境）
+        if getattr(sys, 'frozen', False):
+            # PyInstaller 打包后
+            base_path = sys._MEIPASS
+        else:
+            # 开发环境
+            base_path = os.path.dirname(__file__)
+        
+        # 按优先级搜索 macmon
         macmon_paths = [
-            '/opt/homebrew/bin/macmon',  # Apple Silicon Homebrew
-            '/usr/local/bin/macmon',      # Intel Homebrew
-            'macmon',                      # PATH 中（开发环境）
+            # 1. 打包后的 tools 目录（最高优先级）
+            os.path.join(base_path, 'tools', 'macmon'),
+            # 2. 开发环境 tools 目录（与源码同级）
+            os.path.join(os.path.dirname(__file__), 'tools', 'macmon'),
+            # 3. 项目根目录 tools（当前工作目录）
+            os.path.join(os.getcwd(), 'tools', 'macmon'),
+            # 4. Apple Silicon Homebrew（备用）
+            '/opt/homebrew/bin/macmon',
+            # 5. Intel Mac Homebrew（备用）
+            '/usr/local/bin/macmon',
+            # 6. 系统 PATH 中（最后备用）
+            'macmon',
         ]
         
         for path in macmon_paths:
             try:
+                # 对于完整路径，先检查文件是否存在
+                if path != 'macmon' and not os.path.exists(path):
+                    continue
+                
                 result = subprocess.run(
                     [path, '--version'],
-                    capture_output=True, timeout=5)
+                    capture_output=True, 
+                    timeout=5
+                )
                 if result.returncode == 0:
-                    self._macmon_path = path  # 保存找到的路径
+                    self._macmon_path = path
                     return True
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                continue
             except Exception:
                 continue
+        
         return False
 
     def _start_background_sampling(self) -> None:
