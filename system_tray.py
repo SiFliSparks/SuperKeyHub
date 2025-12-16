@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
 系统托盘模块
+修复 macOS 上 NSApplication 必须在主线程运行的问题
+
+解决方案：在 macOS 上禁用 pystray 托盘功能，因为 pystray 使用 PyObjC
+调用 NSApplication.run()，这必须在主线程执行，与 Flet 的事件循环冲突。
 """
 from __future__ import annotations
 
@@ -28,7 +32,12 @@ try:
     from PIL import Image as _Image_module
     _pystray = _pystray_module
     _Image = _Image_module
-    TRAY_AVAILABLE = True
+    # ========================================================================
+    # 关键修复: macOS 上禁用 pystray，因为它会在子线程调用 NSApplication.run()
+    # 导致崩溃: "NSUpdateCycleInitialize() is called off the main thread"
+    # ========================================================================
+    if not IS_MACOS:
+        TRAY_AVAILABLE = True
 except ImportError:
     pass
 
@@ -52,7 +61,11 @@ else:
 
 
 class SystemTray:
-    """跨平台系统托盘管理器"""
+    """跨平台系统托盘管理器
+    
+    注意: macOS 上由于线程限制，系统托盘功能被禁用。
+    应用仍可正常运行，只是没有托盘图标。
+    """
 
     def __init__(
         self,
@@ -134,6 +147,10 @@ class SystemTray:
 
     def start(self) -> bool:
         """启动系统托盘"""
+        # macOS 上返回 False，托盘功能不可用
+        if IS_MACOS:
+            return False
+            
         if not self.is_available or _pystray is None:
             return False
 
@@ -153,7 +170,7 @@ class SystemTray:
             menu=self._create_menu()
         )
 
-        # 在后台线程运行托盘
+        # 在后台线程运行托盘（仅 Windows/Linux）
         thread: threading.Thread = threading.Thread(
             target=self._icon.run, daemon=True
         )
@@ -506,13 +523,18 @@ Comment=SuperKey Hardware Monitor
 
 
 def is_tray_available() -> bool:
-    """检查系统托盘是否可用"""
+    """检查系统托盘是否可用
+    
+    注意: macOS 上返回 False，因为 pystray 与 Flet 的线程模型不兼容
+    """
     return TRAY_AVAILABLE
 
 
 if __name__ == "__main__":
     print(f"平台: {SYSTEM}")
     print(f"托盘可用: {is_tray_available()}")
+    if IS_MACOS:
+        print("注意: macOS 上托盘功能已禁用（线程兼容性问题）")
     print(f"自启动支持: {AutoStartManager.is_supported()}")
     print(f"自启动已启用: {AutoStartManager.is_enabled()}")
     if IS_WINDOWS:
