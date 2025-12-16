@@ -1,12 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('D:\\program\\SuperKeyHub\\assets', 'assets'), ('D:\\program\\SuperKeyHub\\libs', 'libs')]
+binaries = []
+hiddenimports = ['flet', 'flet_core', 'psutil', 'serial', 'serial.tools.list_ports', 'requests', 'PIL', 'pystray', 'clr', 'wmi', 'pythonnet', 'clr_loader', 'clr_loader.ffi']
+hiddenimports += collect_submodules('clr')
+hiddenimports += collect_submodules('clr_loader')
+tmp_ret = collect_all('pythonnet')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[('/Users/macchuzu/Desktop/SuperKeyHub/tools/sftool', 'tools')],
-    datas=[('/Users/macchuzu/Desktop/SuperKeyHub/assets', 'assets'), ('/Users/macchuzu/Desktop/SuperKeyHub/libs', 'libs'), ('/Users/macchuzu/Desktop/SuperKeyHub/tools', 'tools')],
-    hiddenimports=['flet', 'flet_core', 'psutil', 'serial', 'serial.tools.list_ports', 'requests', 'PIL', 'pystray'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -32,6 +42,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['D:\\program\\SuperKeyHub\\assets\\app.ico'],
 )
 coll = COLLECT(
     exe,
@@ -41,10 +52,4 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='SuperKeyHUB',
-)
-app = BUNDLE(
-    coll,
-    name='SuperKeyHUB.app',
-    icon=None,
-    bundle_identifier=None,
 )

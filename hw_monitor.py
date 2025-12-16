@@ -284,12 +284,27 @@ class OptimizedLHM:
     def get_cpu_temp(self) -> float | None:
         if not self._available:
             return None
+        # 优先获取整体温度（Intel: "CPU Package", AMD: "Tdie" 或 "Tctl"）
+        temp_sensor_names = ['CPU Package', 'Tdie', 'Tctl', 'Package', 'Core (Tctl/Tdie)']
+        for name in temp_sensor_names:
+            val = self._sensor_mapper.get_sensor('Cpu', None, 'Temperature', name)
+            if val is not None:
+                return val
+        # 回退：获取任意一个温度传感器
         return self._sensor_mapper.get_sensor('Cpu', None, 'Temperature')
 
     def get_cpu_power(self) -> float | None:
         if not self._available:
             return None
-        return self._sensor_mapper.get_sensor('Cpu', None, 'Power', 'CPU Package')
+        # Intel 使用 "CPU Package", AMD 使用 "Package"
+        # 按优先级尝试多个可能的名称
+        power_sensor_names = ['CPU Package', 'Package', 'CPU PPT', 'Core (SMU)']
+        for name in power_sensor_names:
+            val = self._sensor_mapper.get_sensor('Cpu', None, 'Power', name)
+            if val is not None:
+                return val
+        # 如果都没找到，尝试获取任意一个功耗传感器
+        return self._sensor_mapper.get_sensor('Cpu', None, 'Power')
 
     def get_cpu_clock(self) -> float | None:
         if not self._available:
@@ -301,8 +316,14 @@ class OptimizedLHM:
     def get_cpu_load(self) -> float | None:
         if not self._available:
             return None
-        return self._sensor_mapper.get_sensor(
-            'Cpu', None, 'Load', 'CPU Total')
+        # 尝试常见的CPU负载传感器名称
+        load_sensor_names = ['CPU Total', 'Total', 'CPU Core']
+        for name in load_sensor_names:
+            val = self._sensor_mapper.get_sensor('Cpu', None, 'Load', name)
+            if val is not None:
+                return val
+        # 回退：获取任意一个负载传感器
+        return self._sensor_mapper.get_sensor('Cpu', None, 'Load')
 
     def get_gpu_temp(self, idx: int = 0) -> float | None:
         if not self._available or idx >= len(self._gpu_names):

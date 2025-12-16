@@ -138,6 +138,9 @@ def install_macos_native_system() -> bool:
 def install_deps() -> int:
     """安装项目依赖"""
     print_header("[PKG] 安装项目依赖")
+    if IS_WINDOWS:
+        # Windows 需要安装 pythonnet 和 wmi 以获取完整硬件数据
+        return run_cmd(["uv", "sync", "--extra", "windows"])
     return run_cmd(["uv", "sync"])
 
 
@@ -288,9 +291,43 @@ def prepare_tools_dir() -> bool:
 # ============================================================================
 # PyInstaller 构建
 # ============================================================================
+def verify_windows_deps() -> bool:
+    """验证Windows平台依赖是否已安装"""
+    if not IS_WINDOWS:
+        return True
+    
+    print("[CHECK] 验证 Windows 硬件监控依赖...")
+    
+    try:
+        result = subprocess.run(
+            ["uv", "run", "python", "-c", "import clr; import wmi; print('OK')"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0 and "OK" in result.stdout:
+            print("[OK] pythonnet 和 wmi 已正确安装")
+            return True
+        else:
+            print("[FAIL] 依赖检查失败:")
+            print(f"   stdout: {result.stdout}")
+            print(f"   stderr: {result.stderr}")
+            return False
+    except Exception as e:
+        print(f"[FAIL] 依赖检查异常: {e}")
+        return False
+
+
 def build_pyinstaller() -> bool:
     """使用 PyInstaller 构建可执行文件"""
     print_header(f"[BUILD] 构建 {APP_NAME}")
+
+    # Windows: 验证硬件监控依赖
+    if IS_WINDOWS and not verify_windows_deps():
+        print("[WARN] Windows 依赖未正确安装，尝试重新安装...")
+        run_cmd(["uv", "sync", "--extra", "windows"])
+        if not verify_windows_deps():
+            print("[FAIL] 无法安装 Windows 依赖，构建可能不完整")
+            print("   请手动运行: uv sync --extra windows")
 
     args: list[str] = [
         "uv", "run", "pyinstaller",
@@ -354,10 +391,23 @@ def build_pyinstaller() -> bool:
         "pystray",
     ]
     if IS_WINDOWS:
-        hidden_imports.extend(["clr", "wmi", "pythonnet"])
+        # pythonnet 和 wmi 用于硬件监控
+        hidden_imports.extend([
+            "clr",
+            "wmi",
+            "pythonnet",
+            "clr_loader",
+            "clr_loader.ffi",
+        ])
 
     for imp in hidden_imports:
         args.extend(["--hidden-import", imp])
+
+    # Windows: 收集 pythonnet 的所有子模块
+    if IS_WINDOWS:
+        args.extend(["--collect-submodules", "clr"])
+        args.extend(["--collect-submodules", "clr_loader"])
+        args.extend(["--collect-all", "pythonnet"])
 
     excludes = ["tkinter", "test", "unittest"]
     for exc in excludes:
@@ -475,6 +525,13 @@ def build_all(skip_installer: bool = False) -> int:
     print(f"   平台: {SYSTEM}")
 
     clean_build()
+
+    # 确保依赖已安装（Windows 需要 pythonnet 和 wmi）
+    print_header("[PKG] 确保依赖已安装")
+    if IS_WINDOWS:
+        run_cmd(["uv", "sync", "--extra", "windows"])
+    else:
+        run_cmd(["uv", "sync"])
 
     # 检查外部工具
     prepare_tools_dir()
