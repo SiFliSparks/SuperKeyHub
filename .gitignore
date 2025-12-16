@@ -115,7 +115,6 @@ tmp/
 temp/
 
 # 构建产物
-*.exe
 *.dmg
 *.AppImage
 *.deb

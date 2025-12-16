@@ -115,51 +115,6 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
-      - name: Download sftool
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # 从 OpenSiFli/sftool releases 下载最新的 Windows 版本
-          $SFTOOL_REPO = "OpenSiFli/sftool"
-          
-          Write-Host "Fetching latest sftool release..."
-          
-          # 使用 GitHub API 获取最新 release 中匹配的资源
-          $releases = gh api "repos/$SFTOOL_REPO/releases/latest" | ConvertFrom-Json
-          $asset = $releases.assets | Where-Object { $_.name -like "*x86_64-pc-windows-msvc.zip" } | Select-Object -First 1
-          
-          if (-not $asset) {
-              Write-Error "[FAIL] No matching sftool asset found for x86_64-pc-windows-msvc"
-              exit 1
-          }
-          
-          $downloadUrl = $asset.browser_download_url
-          $fileName = $asset.name
-          
-          Write-Host "Downloading: $fileName"
-          Write-Host "URL: $downloadUrl"
-          
-          # 下载文件
-          Invoke-WebRequest -Uri $downloadUrl -OutFile $fileName
-          
-          # 解压到工作目录
-          Write-Host "Extracting to working directory..."
-          Expand-Archive -Path $fileName -DestinationPath "." -Force
-          
-          # 验证 sftool.exe 存在
-          if (Test-Path "sftool.exe") {
-              Write-Host "[OK] sftool.exe downloaded successfully"
-              Get-Item "sftool.exe" | Select-Object Name, Length
-          } else {
-              Write-Error "[FAIL] sftool.exe not found after extraction"
-              Get-ChildItem "."
-              exit 1
-          }
-          
-          # 清理压缩包
-          Remove-Item $fileName -Force
-
       - name: Install dependencies
         shell: pwsh
         run: |
@@ -167,6 +122,19 @@ jobs:
           uv sync --extra windows
           # 单独安装 dev 依赖组中的构建工具
           uv pip install ruff mypy pyinstaller
+
+      - name: Verify sftool in tools directory
+        shell: pwsh
+        run: |
+          # 验证 sftool.exe 已存在于 tools 目录
+          if (Test-Path "tools\sftool.exe") {
+              Write-Host "[OK] sftool.exe found in tools directory"
+              Get-Item "tools\sftool.exe" | Select-Object Name, Length
+          } else {
+              Write-Error "[FAIL] sftool.exe not found in tools directory"
+              Write-Host "Please ensure sftool.exe is committed to the tools/ directory"
+              exit 1
+          }
 
       - name: Run lint check
         shell: pwsh
@@ -226,17 +194,6 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: |
           uv run python build.py --no-installer
-          
-      - name: Copy sftool.exe to dist
-        shell: pwsh
-        run: |
-          # 将 sftool.exe 复制到构建输出目录
-          if (Test-Path "sftool.exe") {
-              Copy-Item "sftool.exe" -Destination "dist\${{ env.APP_NAME }}\" -Force
-              Write-Host "[OK] sftool.exe copied to dist folder"
-          } else {
-              Write-Warning "[WARN] sftool.exe not found in working directory"
-          }
 
       - name: Verify build output
         shell: pwsh
@@ -249,12 +206,13 @@ jobs:
               exit 1
           }
           
-          # 验证 sftool.exe 在构建输出中
-          if (Test-Path "dist\${{ env.APP_NAME }}\sftool.exe") {
-              Write-Host "[OK] sftool.exe included in build"
+          # 验证 sftool.exe 在构建输出的 tools 目录中
+          if (Test-Path "dist\${{ env.APP_NAME }}\tools\sftool.exe") {
+              Write-Host "[OK] sftool.exe included in build (tools directory)"
           } else {
-              Write-Error "[FAIL] sftool.exe not found in build output"
-              exit 1
+              Write-Warning "[WARN] sftool.exe not found in build output tools directory"
+              Write-Host "Contents of dist\${{ env.APP_NAME }}:"
+              Get-ChildItem "dist\${{ env.APP_NAME }}" -Recurse | Select-Object FullName
           }
 
       - name: Install NSIS
