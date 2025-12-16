@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('D:\\program\\SuperKeyHub\\assets', 'assets'), ('D:\\program\\SuperKeyHub\\libs', 'libs')]
+datas = [('D:\\program\\SuperKeyHub\\assets', 'assets'), ('D:\\program\\SuperKeyHub\\libs', 'libs'), ('D:\\program\\SuperKeyHub\\tools', 'tools')]
 binaries = []
 hiddenimports = ['flet', 'flet_core', 'psutil', 'serial', 'serial.tools.list_ports', 'requests', 'PIL', 'pystray', 'clr', 'wmi', 'pythonnet', 'clr_loader', 'clr_loader.ffi']
 hiddenimports += collect_submodules('clr')
