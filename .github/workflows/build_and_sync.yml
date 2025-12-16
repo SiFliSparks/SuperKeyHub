@@ -1,4 +1,4 @@
-name: Build and Sync to COS
+name: Build and Release
 
 on:
   push:
@@ -26,7 +26,9 @@ env:
   UV_VERSION: "0.5.14"
 
 jobs:
+  # ============================================================================
   # 检测是否需要创建 release
+  # ============================================================================
   check-release:
     name: Check Release Trigger
     runs-on: ubuntu-latest
@@ -95,6 +97,9 @@ jobs:
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
 
+  # ============================================================================
+  # Windows 构建
+  # ============================================================================
   build-windows:
     name: Build Windows
     needs: check-release
@@ -118,15 +123,12 @@ jobs:
       - name: Install dependencies
         shell: pwsh
         run: |
-          # Windows 平台安装所有依赖
           Write-Host "[STEP 1] Installing base dependencies with windows extras..."
           uv sync --extra windows
           
-          # 安装 dev 依赖组（包含 pyinstaller）
           Write-Host "[STEP 2] Installing dev dependencies..."
           uv sync --group dev
           
-          # 如果 pyinstaller 仍未安装，使用 pip 直接安装
           Write-Host "[STEP 3] Verifying PyInstaller installation..."
           $result = uv run python -c "import PyInstaller; print('OK')" 2>&1
           if ($LASTEXITCODE -ne 0) {
@@ -134,7 +136,6 @@ jobs:
               uv pip install pyinstaller
           }
           
-          # 最终验证
           uv run pyinstaller --version
           if ($LASTEXITCODE -ne 0) {
               Write-Error "[FAIL] PyInstaller installation failed"
@@ -142,17 +143,37 @@ jobs:
           }
           Write-Host "[OK] PyInstaller installed successfully"
 
+      - name: Verify required assets
+        shell: pwsh
+        run: |
+          Write-Host "[CHECK] Verifying required assets..."
+          
+          # 检查图标文件
+          if (Test-Path "assets\app.ico") {
+              Write-Host "[OK] app.ico found"
+              Get-Item "assets\app.ico" | Select-Object Name, Length
+          } else {
+              Write-Error "[FAIL] assets\app.ico not found - required for Windows build"
+              Write-Host "Please ensure app.ico is committed to the assets/ directory"
+              exit 1
+          }
+          
+          # 检查 LICENSE 文件（NSIS 需要）
+          if (Test-Path "LICENSE") {
+              Write-Host "[OK] LICENSE file found"
+          } else {
+              Write-Warning "[WARN] LICENSE file not found - NSIS installer may fail"
+          }
+
       - name: Verify sftool in tools directory
         shell: pwsh
         run: |
-          # 验证 sftool.exe 已存在于 tools 目录
           if (Test-Path "tools\sftool.exe") {
               Write-Host "[OK] sftool.exe found in tools directory"
               Get-Item "tools\sftool.exe" | Select-Object Name, Length
           } else {
-              Write-Error "[FAIL] sftool.exe not found in tools directory"
-              Write-Host "Please ensure sftool.exe is committed to the tools/ directory"
-              exit 1
+              Write-Warning "[WARN] sftool.exe not found in tools directory"
+              Write-Host "Firmware update functionality will not be available"
           }
 
       - name: Check Python dependencies
@@ -160,16 +181,9 @@ jobs:
         run: |
           Write-Host "[CHECK] Verifying critical dependencies..."
           
-          # 检查 PyInstaller
           uv run python -c "import PyInstaller; print('PyInstaller:', PyInstaller.__version__)"
-          
-          # 检查 pythonnet (Windows)
           uv run python -c "import clr; print('pythonnet: OK')"
-          
-          # 检查 wmi
           uv run python -c "import wmi; print('wmi: OK')"
-          
-          # 检查 flet
           uv run python -c "import flet; print('flet: OK')"
           
           Write-Host "[OK] All critical dependencies available"
@@ -223,7 +237,6 @@ jobs:
           Write-Host "[OK] Created hub_verid.json:"
           Get-Content "hub_verid.json"
           
-          # 设置输出变量供后续步骤使用
           echo "app_version=$appVersion" >> $env:GITHUB_OUTPUT
 
       - name: Build with PyInstaller
@@ -232,16 +245,14 @@ jobs:
           PYTHONIOENCODING: utf-8
           PYTHONUNBUFFERED: "1"
         run: |
-          # 显示 Python 和 PyInstaller 版本
           Write-Host "[DEBUG] Python version:"
           uv run python --version
           Write-Host "[DEBUG] PyInstaller version:"
           uv run python -c "import PyInstaller; print(PyInstaller.__version__)"
           
-          # 运行构建（使用 --skip-deps 因为依赖已在上一步安装）
+          # 运行构建
           uv run python build.py --no-installer --skip-deps
           
-          # 如果失败，显示更多诊断信息
           if ($LASTEXITCODE -ne 0) {
               Write-Host "[DEBUG] Build failed, checking for logs..."
               if (Test-Path "build\SuperKeyHUB\warn-SuperKeyHUB.txt") {
@@ -262,13 +273,25 @@ jobs:
               exit 1
           }
           
-          # 验证 sftool.exe 在构建输出的 tools 目录中
-          if (Test-Path "dist\${{ env.APP_NAME }}\tools\sftool.exe") {
-              Write-Host "[OK] sftool.exe included in build (tools directory)"
+          # 验证 libs 目录
+          if (Test-Path "dist\${{ env.APP_NAME }}\libs") {
+              Write-Host "[OK] libs directory included"
+              Get-ChildItem "dist\${{ env.APP_NAME }}\libs" | Select-Object Name, Length
           } else {
-              Write-Warning "[WARN] sftool.exe not found in build output tools directory"
-              Write-Host "Contents of dist\${{ env.APP_NAME }}:"
-              Get-ChildItem "dist\${{ env.APP_NAME }}" -Recurse | Select-Object FullName
+              Write-Warning "[WARN] libs directory not found in build output"
+          }
+          
+          # 验证 assets 目录
+          if (Test-Path "dist\${{ env.APP_NAME }}\assets") {
+              Write-Host "[OK] assets directory included"
+          } else {
+              Write-Warning "[WARN] assets directory not found in build output"
+          }
+          
+          # 验证 tools 目录
+          if (Test-Path "dist\${{ env.APP_NAME }}\tools") {
+              Write-Host "[OK] tools directory included"
+              Get-ChildItem "dist\${{ env.APP_NAME }}\tools" | Select-Object Name, Length
           }
 
       - name: Install NSIS
@@ -276,8 +299,24 @@ jobs:
           choco install nsis -y
 
       - name: Build NSIS Installer
+        shell: pwsh
         run: |
+          # 验证 NSIS 脚本存在
+          if (-not (Test-Path "installer.nsi")) {
+              Write-Error "[FAIL] installer.nsi not found"
+              exit 1
+          }
+          
+          # 更新 NSIS 脚本中的版本号
+          $version = "${{ steps.version.outputs.app_version }}"
+          Write-Host "[INFO] Building installer for version: $version"
+          
           & "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
+          
+          if ($LASTEXITCODE -ne 0) {
+              Write-Error "[FAIL] NSIS build failed"
+              exit 1
+          }
 
       - name: Verify installer
         shell: pwsh
@@ -290,6 +329,7 @@ jobs:
               Get-Item $installerPath | Select-Object Name, Length
           } else {
               Write-Warning "[WARN] Installer not found at expected path"
+              Write-Host "Looking for installers in dist:"
               Get-ChildItem "dist" -Filter "*.exe"
           }
 
@@ -305,10 +345,8 @@ jobs:
       - name: Copy version JSON to dist
         shell: pwsh
         run: |
-          # 将版本 JSON 文件复制到 dist 目录
           Copy-Item "hub_verid.json" -Destination "dist\" -Force
           Write-Host "[OK] hub_verid.json copied to dist folder"
-          Get-Content "dist\hub_verid.json"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -320,9 +358,272 @@ jobs:
             dist/hub_verid.json
           retention-days: 7
 
+  # ============================================================================
+  # macOS 构建 (Universal - Intel + Apple Silicon)
+  # ============================================================================
+  build-macos:
+    name: Build macOS
+    needs: check-release
+    runs-on: macos-14  # Apple Silicon runner
+    outputs:
+      app_version: ${{ steps.version.outputs.app_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          echo "[STEP 1] Installing base dependencies..."
+          uv sync
+          
+          echo "[STEP 2] Installing dev dependencies..."
+          uv sync --group dev
+          
+          echo "[STEP 3] Verifying PyInstaller installation..."
+          uv run pyinstaller --version || {
+              echo "[WARN] PyInstaller not found, installing via pip..."
+              uv pip install pyinstaller
+          }
+          
+          echo "[OK] PyInstaller installed successfully"
+
+      - name: Verify required assets
+        run: |
+          echo "[CHECK] Verifying required assets..."
+          
+          # 检查 macOS 图标
+          if [ -f "assets/app.icns" ]; then
+              echo "[OK] app.icns found"
+              ls -la assets/app.icns
+          else
+              echo "[WARN] assets/app.icns not found"
+              echo "Will proceed without custom icon"
+          fi
+          
+          # 检查 LICENSE 文件
+          if [ -f "LICENSE" ]; then
+              echo "[OK] LICENSE file found"
+          fi
+
+      - name: Verify tools directory
+        run: |
+          echo "[CHECK] Checking tools directory..."
+          
+          # sftool for macOS
+          if [ -f "tools/sftool" ]; then
+              echo "[OK] sftool found"
+              chmod +x tools/sftool
+              ls -la tools/sftool
+          else
+              echo "[WARN] tools/sftool not found - firmware update will not work"
+          fi
+          
+          # macmon (optional, for Apple Silicon metrics)
+          if [ -f "tools/macmon" ]; then
+              echo "[OK] macmon found"
+              chmod +x tools/macmon
+          else
+              echo "[INFO] macmon not bundled - will try system version at runtime"
+          fi
+
+      - name: Check for native library source
+        run: |
+          if [ -d "macos_native" ]; then
+              echo "[OK] macos_native directory found"
+              ls -la macos_native/
+          else
+              echo "[INFO] No macos_native directory - using psutil fallback"
+          fi
+
+      - name: Build native library (if exists)
+        run: |
+          if [ -d "macos_native" ] && [ -f "macos_native/Makefile" ]; then
+              echo "[BUILD] Compiling native macOS sensor library..."
+              cd macos_native
+              make clean || true
+              make
+              
+              if [ -f "libmacos_sensors.dylib" ]; then
+                  echo "[OK] Native library built successfully"
+                  mkdir -p ../libs
+                  cp libmacos_sensors.dylib ../libs/
+              fi
+              cd ..
+          fi
+
+      - name: Run lint check
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          uv run ruff check . --select=E,F || true
+
+      - name: Extract version
+        id: version
+        run: |
+          # 从 main.py 提取 APP_VERSION
+          APP_VERSION=$(grep -oE 'APP_VERSION:\s*str\s*=\s*"[^"]+"' main.py | sed 's/.*"\(.*\)"/\1/')
+          
+          if [ -z "$APP_VERSION" ]; then
+              echo "[FAIL] Could not find APP_VERSION in main.py"
+              exit 1
+          fi
+          
+          echo "[OK] Detected APP_VERSION: $APP_VERSION"
+          echo "app_version=$APP_VERSION" >> $GITHUB_OUTPUT
+          
+          # 提取 FIRMWARE_COMPAT（可选）
+          FIRMWARE_COMPAT=$(grep -oE 'FIRMWARE_COMPAT:\s*str\s*=\s*"[^"]+"' main.py | sed 's/.*"\(.*\)"/\1/' || echo "")
+          
+          # 创建版本 JSON
+          cat > hub_verid.json << EOF
+          {
+            "version": "$APP_VERSION",
+            "firmware_compat": "$FIRMWARE_COMPAT",
+            "build_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "tag": "v$APP_VERSION",
+            "commit": "${{ github.sha }}",
+            "platform": "macOS",
+            "download_url": "https://github.com/${{ github.repository }}/releases/download/v$APP_VERSION/"
+          }
+          EOF
+          
+          echo "[OK] Created hub_verid.json"
+          cat hub_verid.json
+
+      - name: Build with PyInstaller
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: "1"
+        run: |
+          echo "[DEBUG] Python version:"
+          uv run python --version
+          echo "[DEBUG] PyInstaller version:"
+          uv run python -c "import PyInstaller; print(PyInstaller.__version__)"
+          
+          # 运行构建（跳过 DMG，后面单独处理）
+          uv run python build.py --no-installer --skip-deps
+          
+          if [ $? -ne 0 ]; then
+              echo "[FAIL] Build failed"
+              if [ -f "build/SuperKeyHUB/warn-SuperKeyHUB.txt" ]; then
+                  echo "[DEBUG] PyInstaller warnings:"
+                  cat "build/SuperKeyHUB/warn-SuperKeyHUB.txt"
+              fi
+              exit 1
+          fi
+
+      - name: Verify and prepare .app bundle
+        run: |
+          APP_PATH="dist/${{ env.APP_NAME }}.app"
+          PYINSTALLER_APP="dist/${{ env.APP_NAME }}/${{ env.APP_NAME }}.app"
+          
+          # PyInstaller 可能将 .app 放在子目录中
+          if [ -d "$PYINSTALLER_APP" ] && [ ! -d "$APP_PATH" ]; then
+              echo "[INFO] Moving .app from subdirectory..."
+              mv "$PYINSTALLER_APP" "$APP_PATH"
+          fi
+          
+          if [ -d "$APP_PATH" ]; then
+              echo "[OK] App bundle found: $APP_PATH"
+              ls -la "$APP_PATH"
+              
+              # 设置工具执行权限
+              TOOLS_PATH="$APP_PATH/Contents/Resources/tools"
+              if [ -d "$TOOLS_PATH" ]; then
+                  echo "[INFO] Setting tool permissions..."
+                  chmod +x "$TOOLS_PATH"/* 2>/dev/null || true
+                  ls -la "$TOOLS_PATH"
+              fi
+              
+              # 验证可执行文件
+              MACOS_PATH="$APP_PATH/Contents/MacOS"
+              if [ -d "$MACOS_PATH" ]; then
+                  echo "[OK] MacOS directory:"
+                  ls -la "$MACOS_PATH"
+              fi
+          else
+              echo "[FAIL] App bundle not found"
+              echo "Contents of dist:"
+              ls -laR dist/
+              exit 1
+          fi
+
+      - name: Create DMG
+        run: |
+          VERSION="${{ steps.version.outputs.app_version }}"
+          APP_PATH="dist/${{ env.APP_NAME }}.app"
+          DMG_NAME="${{ env.APP_NAME }}-${VERSION}-macOS.dmg"
+          DMG_PATH="dist/$DMG_NAME"
+          
+          if [ ! -d "$APP_PATH" ]; then
+              echo "[FAIL] App bundle not found at $APP_PATH"
+              exit 1
+          fi
+          
+          echo "[BUILD] Creating DMG: $DMG_NAME"
+          
+          # 删除旧的 DMG（如果存在）
+          rm -f "$DMG_PATH"
+          
+          # 创建 DMG
+          hdiutil create \
+              -volname "${{ env.APP_NAME }}" \
+              -srcfolder "$APP_PATH" \
+              -ov \
+              -format UDZO \
+              "$DMG_PATH"
+          
+          if [ -f "$DMG_PATH" ]; then
+              echo "[OK] DMG created successfully"
+              ls -lh "$DMG_PATH"
+          else
+              echo "[FAIL] DMG creation failed"
+              exit 1
+          fi
+
+      - name: Create portable ZIP (alternative to DMG)
+        run: |
+          VERSION="${{ steps.version.outputs.app_version }}"
+          APP_PATH="dist/${{ env.APP_NAME }}.app"
+          ZIP_NAME="${{ env.APP_NAME }}-${VERSION}-macOS.zip"
+          
+          cd dist
+          zip -r "$ZIP_NAME" "${{ env.APP_NAME }}.app"
+          
+          echo "[OK] Portable ZIP created: $ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+
+      - name: Copy version JSON to dist
+        run: |
+          cp hub_verid.json dist/
+          echo "[OK] hub_verid.json copied to dist"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/hub_verid.json
+          retention-days: 7
+
+  # ============================================================================
+  # 同步到腾讯云 COS
+  # ============================================================================
   sync-to-cos:
     name: Sync to Tencent COS
-    needs: [check-release, build-windows]
+    needs: [check-release, build-windows, build-macos]
     runs-on: ubuntu-latest
     if: |
       needs.check-release.outputs.should_release == 'true' &&
@@ -350,9 +651,12 @@ jobs:
           artifacts: artifacts/
           delete_remote: true
 
+  # ============================================================================
+  # 创建 GitHub Release
+  # ============================================================================
   create-release:
     name: Create Tag and GitHub Release
-    needs: [check-release, build-windows, sync-to-cos]
+    needs: [check-release, build-windows, build-macos, sync-to-cos]
     runs-on: ubuntu-latest
     if: needs.check-release.outputs.should_release == 'true'
     permissions:
@@ -369,6 +673,11 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: List release files
+        run: |
+          echo "[RELEASE] Files to be released:"
+          find artifacts -type f -exec ls -lh {} \;
+
       - name: Create tag if not exists
         if: needs.check-release.outputs.is_tag != 'true'
         env:
@@ -376,7 +685,6 @@ jobs:
         run: |
           TAG_NAME="v${{ needs.check-release.outputs.app_version }}"
           
-          # 检查 tag 是否已存在
           if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
             echo "[WARN] Tag $TAG_NAME already exists"
           else
@@ -388,11 +696,52 @@ jobs:
             echo "[OK] Tag $TAG_NAME created and pushed"
           fi
 
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          VERSION="${{ needs.check-release.outputs.app_version }}"
+          
+          cat > release_notes.md << 'EOF'
+          ## 📦 Downloads
+          
+          ### Windows
+          - **安装程序**: `SuperKeyHUB-VERSION-Setup.exe` (推荐)
+          - **便携版**: `SuperKeyHUB-VERSION-Windows-Portable.zip`
+          
+          ### macOS
+          - **DMG 安装包**: `SuperKeyHUB-VERSION-macOS.dmg` (推荐)
+          - **ZIP 压缩包**: `SuperKeyHUB-VERSION-macOS.zip`
+          
+          ## 🔧 安装说明
+          
+          ### Windows
+          1. 下载 `SuperKeyHUB-VERSION-Setup.exe`
+          2. 运行安装程序并按提示完成安装
+          3. 从开始菜单启动 SuperKeyHUB
+          
+          ### macOS
+          1. 下载 `SuperKeyHUB-VERSION-macOS.dmg`
+          2. 打开 DMG 文件
+          3. 将 SuperKeyHUB 拖入应用程序文件夹
+          4. 首次运行时，右键点击应用选择"打开"以绕过 Gatekeeper
+          
+          ## ⚠️ 注意事项
+          - Windows 版本需要管理员权限以获取完整硬件信息
+          - macOS 版本在 Apple Silicon 和 Intel Mac 上均可运行
+          EOF
+          
+          # 替换版本号
+          sed -i "s/VERSION/$VERSION/g" release_notes.md
+          
+          echo "[OK] Release notes generated"
+          cat release_notes.md
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.check-release.outputs.app_version }}
           name: Release v${{ needs.check-release.outputs.app_version }}
+          body_path: release_notes.md
           files: artifacts/*
           generate_release_notes: true
           draft: false
