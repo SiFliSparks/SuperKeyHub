@@ -171,7 +171,9 @@ def install_deps() -> int:
 def install_dev_deps() -> int:
     """安装开发依赖"""
     print_header("[PKG] 安装开发依赖")
-    return run_cmd(["uv", "sync", "--all-extras"])
+    if IS_WINDOWS:
+        return run_cmd(["uv", "sync", "--extra", "windows", "--group", "dev"])
+    return run_cmd(["uv", "sync", "--group", "dev"])
 
 
 # ============================================================================
@@ -354,10 +356,10 @@ def build_pyinstaller() -> bool:
     # Windows: 验证硬件监控依赖
     if IS_WINDOWS and not verify_windows_deps():
         print("[WARN] Windows 依赖未正确安装，尝试重新安装...")
-        run_cmd(["uv", "sync", "--extra", "windows"])
+        run_cmd(["uv", "sync", "--extra", "windows", "--group", "dev"])
         if not verify_windows_deps():
             print("[FAIL] 无法安装 Windows 依赖，构建可能不完整")
-            print("   请手动运行: uv sync --extra windows")
+            print("   请手动运行: uv sync --extra windows --group dev")
 
     args: list[str] = [
         "uv", "run", "pyinstaller",
@@ -569,12 +571,12 @@ def build_all(skip_installer: bool = False) -> int:
 
     clean_build()
 
-    # 确保依赖已安装（Windows 需要 pythonnet 和 wmi）
+    # 确保依赖已安装（Windows 需要 pythonnet 和 wmi，构建需要 dev 组）
     print_header("[PKG] 确保依赖已安装")
     if IS_WINDOWS:
-        run_cmd(["uv", "sync", "--extra", "windows"])
+        run_cmd(["uv", "sync", "--extra", "windows", "--group", "dev"])
     else:
-        run_cmd(["uv", "sync"])
+        run_cmd(["uv", "sync", "--group", "dev"])
 
     # 检查外部工具
     prepare_tools_dir()
