@@ -136,6 +136,25 @@ jobs:
               exit 1
           }
 
+      - name: Check Python dependencies
+        shell: pwsh
+        run: |
+          Write-Host "[CHECK] Verifying critical dependencies..."
+          
+          # 检查 PyInstaller
+          uv run python -c "import PyInstaller; print(f'PyInstaller: {PyInstaller.__version__}')"
+          
+          # 检查 pythonnet (Windows)
+          uv run python -c "import clr; print('pythonnet: OK')"
+          
+          # 检查 wmi
+          uv run python -c "import wmi; print('wmi: OK')"
+          
+          # 检查 flet
+          uv run python -c "import flet; print(f'flet: {flet.__version__}')"
+          
+          Write-Host "[OK] All critical dependencies available"
+
       - name: Run lint check
         shell: pwsh
         env:
@@ -192,8 +211,26 @@ jobs:
         shell: pwsh
         env:
           PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: "1"
         run: |
+          # 显示 Python 和 PyInstaller 版本
+          Write-Host "[DEBUG] Python version:"
+          uv run python --version
+          Write-Host "[DEBUG] PyInstaller version:"
+          uv run python -c "import PyInstaller; print(PyInstaller.__version__)"
+          
+          # 运行构建
           uv run python build.py --no-installer
+          
+          # 如果失败，显示更多诊断信息
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "[DEBUG] Build failed, checking for logs..."
+              if (Test-Path "build\SuperKeyHUB\warn-SuperKeyHUB.txt") {
+                  Write-Host "[DEBUG] PyInstaller warnings:"
+                  Get-Content "build\SuperKeyHUB\warn-SuperKeyHUB.txt"
+              }
+              exit $LASTEXITCODE
+          }
 
       - name: Verify build output
         shell: pwsh

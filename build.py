@@ -50,11 +50,35 @@ MACOS_NATIVE_DIR: Path = PROJECT_ROOT / "macos_native"
 def run_cmd(
     cmd: list[str],
     cwd: Path | None = None,
-    check: bool = False
+    check: bool = False,
+    capture: bool = False
 ) -> int:
     """运行命令并返回退出码"""
     print(f">>> {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=cwd)
+    sys.stdout.flush()
+    
+    if capture:
+        result = subprocess.run(
+            cmd, 
+            cwd=cwd, 
+            capture_output=True, 
+            text=True,
+            encoding='utf-8',
+            errors='replace'
+        )
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+    else:
+        # 实时输出，不缓冲
+        result = subprocess.run(
+            cmd, 
+            cwd=cwd,
+            stdout=None,  # 直接输出到控制台
+            stderr=None,
+        )
+    
     if check and result.returncode != 0:
         sys.exit(result.returncode)
     return result.returncode
@@ -321,6 +345,12 @@ def build_pyinstaller() -> bool:
     """使用 PyInstaller 构建可执行文件"""
     print_header(f"[BUILD] 构建 {APP_NAME}")
 
+    # 环境诊断
+    print("[DEBUG] Python version:", sys.version)
+    print("[DEBUG] Working directory:", os.getcwd())
+    print("[DEBUG] PROJECT_ROOT:", PROJECT_ROOT)
+    sys.stdout.flush()
+
     # Windows: 验证硬件监控依赖
     if IS_WINDOWS and not verify_windows_deps():
         print("[WARN] Windows 依赖未正确安装，尝试重新安装...")
@@ -415,9 +445,22 @@ def build_pyinstaller() -> bool:
 
     args.append("main.py")
 
+    # 打印完整命令以便调试
+    print("\n[DEBUG] Full PyInstaller command:")
+    print(" ".join(args))
+    print()
+    sys.stdout.flush()
+
     result = run_cmd(args)
     if result != 0:
         print("[FAIL] PyInstaller 构建失败")
+        print(f"[DEBUG] Exit code: {result}")
+        # 检查是否有 PyInstaller 日志
+        warn_log = BUILD_DIR / "SuperKeyHUB" / "warn-SuperKeyHUB.txt"
+        if warn_log.exists():
+            print(f"\n[DEBUG] PyInstaller warnings ({warn_log}):")
+            with open(warn_log, encoding='utf-8', errors='replace') as f:
+                print(f.read())
         return False
 
     print("[OK] PyInstaller 构建成功")
