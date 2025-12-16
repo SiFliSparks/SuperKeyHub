@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """
 硬件监控模块 - 跨平台支持 Windows/macOS/Linux
-v2.1 - 增强型跨平台监控
+v2.2 - Apple Silicon IOKit/IOReport 增强版
+
+对于 Apple Silicon Mac，推荐安装 macmon 以获得最佳体验:
+  brew install macmon
 """
 
+import ctypes
+from ctypes import POINTER, byref, c_char_p, c_double, c_int64, c_uint32, c_uint64, c_void_p
 import json
 import math
 import os
 import platform
 import re
+import struct
 import subprocess
 import threading
 import time
@@ -100,545 +106,704 @@ class CachedSensorMapper:
                 if hw_type not in new_sensor_data:
                     new_sensor_data[hw_type] = {}
                 if hw_name not in new_sensor_data[hw_type]:
-                    new_sensor_data[hw_type][hw_name] = {
-                        'sensors': {},
-                        'hardware': hw
-                    }
+                    new_sensor_data[hw_type][hw_name] = {}
 
                 hw.Update()
+
                 for sensor in hw.Sensors:
-                    self._process_sensor(
-                        new_sensor_data, hw_type, hw_name, sensor)
+                    s_type = str(sensor.SensorType)
+                    s_name = str(sensor.Name)
+                    s_val = sensor.Value
 
-                for sub_hw in hw.SubHardware:
-                    try:
-                        sub_hw_type = str(sub_hw.HardwareType)
-                        sub_hw_name = str(sub_hw.Name)
+                    if s_type not in new_sensor_data[hw_type][hw_name]:
+                        new_sensor_data[hw_type][hw_name][s_type] = {}
 
-                        if sub_hw_type not in new_sensor_data:
-                            new_sensor_data[sub_hw_type] = {}
-                        if sub_hw_name not in new_sensor_data[sub_hw_type]:
-                            new_sensor_data[sub_hw_type][sub_hw_name] = {
-                                'sensors': {},
-                                'hardware': sub_hw
-                            }
+                    new_sensor_data[hw_type][hw_name][s_type][s_name] = (
+                        float(s_val) if s_val is not None else None)
 
-                        sub_hw.Update()
-                        for sensor in sub_hw.Sensors:
-                            self._process_sensor(
-                                new_sensor_data, sub_hw_type,
-                                sub_hw_name, sensor)
-                    except Exception:
-                        continue
+                for sub in hw.SubHardware:
+                    sub.Update()
+                    sub_name = str(sub.Name)
+                    if sub_name not in new_sensor_data[hw_type]:
+                        new_sensor_data[hw_type][sub_name] = {}
 
+                    for sensor in sub.Sensors:
+                        s_type = str(sensor.SensorType)
+                        s_name = str(sensor.Name)
+                        s_val = sensor.Value
+
+                        if s_type not in new_sensor_data[hw_type][sub_name]:
+                            new_sensor_data[hw_type][sub_name][s_type] = {}
+
+                        new_sensor_data[hw_type][sub_name][s_type][s_name] = (
+                            float(s_val) if s_val is not None else None)
             except Exception:
                 continue
 
         self.sensor_data = new_sensor_data
         self.last_update = time.time()
 
-    def _process_sensor(
-        self,
-        sensor_data: dict[str, dict[str, Any]],
-        hw_type: str,
-        hw_name: str,
-        sensor: Any
-    ) -> None:
-        try:
-            sensor_type = str(sensor.SensorType)
-            sensor_name = str(sensor.Name).lower()
-            sensor_value = sensor.Value
-
-            is_nan = isinstance(sensor_value, float) and math.isnan(
-                sensor_value)
-            if sensor_value is None or is_nan:
-                return
-
-            if sensor_type not in sensor_data[hw_type][hw_name]['sensors']:
-                sensor_data[hw_type][hw_name]['sensors'][sensor_type] = {}
-
-            sensors = sensor_data[hw_type][hw_name]['sensors']
-            sensors[sensor_type][sensor_name] = {
-                'value': float(sensor_value),
-                'name': str(sensor.Name),
-            }
-        except Exception:
-            pass
-
-    def get_sensor_value(
-        self,
-        hw_type: str,
-        sensor_type: str,
-        keywords: list[str],
-        fallback_keywords: list[str] | None = None
-    ) -> float | None:
+    def get_sensor(self, hw_type: str, hw_name: str | None,
+                   s_type: str, s_name: str | None = None) -> float | None:
         self.update_sensors_if_needed()
 
-        if hw_type not in self.sensor_data:
+        type_data = self.sensor_data.get(hw_type, {})
+        if not type_data:
             return None
 
-        for hw_name, hw_info in self.sensor_data[hw_type].items():
-            if sensor_type in hw_info['sensors']:
-                sensors = hw_info['sensors'][sensor_type]
-                for sensor_name, sensor_info in sensors.items():
-                    if any(keyword in sensor_name for keyword in keywords):
-                        return sensor_info['value']
+        if hw_name:
+            hw_data = type_data.get(hw_name, {})
+            sensor_type_data = hw_data.get(s_type, {})
+            if s_name:
+                return sensor_type_data.get(s_name)
+            return next(iter(sensor_type_data.values()), None) if sensor_type_data else None
 
-        if fallback_keywords:
-            for hw_name, hw_info in self.sensor_data[hw_type].items():
-                if sensor_type in hw_info['sensors']:
-                    sensors = hw_info['sensors'][sensor_type]
-                    for sensor_name, sensor_info in sensors.items():
-                        if any(kw in sensor_name for kw in fallback_keywords):
-                            return sensor_info['value']
-
-        for hw_name, hw_info in self.sensor_data[hw_type].items():
-            if sensor_type in hw_info['sensors']:
-                sensors = hw_info['sensors'][sensor_type]
-                if sensors:
-                    return list(sensors.values())[0]['value']
-
+        for hw_data in type_data.values():
+            sensor_type_data = hw_data.get(s_type, {})
+            if s_name:
+                val = sensor_type_data.get(s_name)
+                if val is not None:
+                    return val
+            elif sensor_type_data:
+                return next(iter(sensor_type_data.values()), None)
         return None
 
-    def get_all_sensor_values(
-        self,
-        hw_type: str,
-        sensor_type: str,
-        keywords: list[str]
-    ) -> list[float]:
+    def get_all_sensors_of_type(self, hw_type: str,
+                                s_type: str) -> list[tuple[str, str, float]]:
         self.update_sensors_if_needed()
+        results: list[tuple[str, str, float]] = []
 
-        values: list[float] = []
-        if hw_type not in self.sensor_data:
-            return values
+        type_data = self.sensor_data.get(hw_type, {})
+        for hw_name, hw_data in type_data.items():
+            sensor_type_data = hw_data.get(s_type, {})
+            for s_name, val in sensor_type_data.items():
+                if val is not None:
+                    results.append((hw_name, s_name, val))
+        return results
 
-        for hw_name, hw_info in self.sensor_data[hw_type].items():
-            if sensor_type in hw_info['sensors']:
-                sensors = hw_info['sensors'][sensor_type]
-                for sensor_name, sensor_info in sensors.items():
-                    if any(keyword in sensor_name for keyword in keywords):
-                        values.append(sensor_info['value'])
-
-        return values
-
-
-def convert_memory_to_bytes(
-    value: float | None,
-    data_type: str = "auto"
-) -> float | None:
-    """智能内存单位转换"""
-    if value is None or value < 0:
-        return None
-
-    if value == 0:
-        return 0.0
-
-    if data_type == "gpu_mem":
-        if value < 1 or value < 200:
-            return value * (1024 ** 3)
-        elif value < 200000:
-            return value * (1024 ** 2)
-        else:
-            return value
-
-    elif data_type == "system_mem":
-        if value < 1 or value < 1024:
-            return value * (1024 ** 3)
-        elif value < 1048576:
-            return value * (1024 ** 2)
-        else:
-            return value
-
-    else:
-        if value < 1 or value < 200:
-            return value * (1024 ** 3)
-        elif value < 200000:
-            return value * (1024 ** 2)
-        elif value < 1073741824:
-            return value * 1024
-        else:
-            return value
-
-
-def validate_memory_value(
-    value: float | None,
-    expected_range_gb: tuple[float, float] = (0.1, 256)
-) -> bool:
-    if value is None or value <= 0:
-        return False
-    value_gb = value / (1024 ** 3)
-    return expected_range_gb[0] <= value_gb <= expected_range_gb[1]
-
-
-# =============================================================================
-# Windows LHM 类 (原有逻辑保持不变)
-# =============================================================================
 
 class OptimizedLHM:
-    """Windows LibreHardwareMonitor 封装"""
+    """
+    Optimized LibreHardwareMonitor wrapper for Windows
+    """
+    _instance: 'OptimizedLHM | None' = None
+    _lock: threading.Lock = threading.Lock()
+
+    def __new__(cls) -> 'OptimizedLHM':
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    instance = super().__new__(cls)
+                    instance._initialized = False
+                    cls._instance = instance
+        return cls._instance
 
     def __init__(self) -> None:
-        self.ok: bool = False
-        self.SensorType: Any | None = None
-        self.HardwareType: Any | None = None
-        self.pc: Any | None = None
-        self.sensor_mapper: CachedSensorMapper = CachedSensorMapper(
-            cache_duration=2.0)
-        self.error_details: list[str] = []
-        self.partial_load: bool = False
-
-        self.system_info: dict[str, Any] = {
-            'python_arch': platform.architecture(),
-            'is_admin': is_admin(),
-        }
-
-        if not IS_WINDOWS or not clr:
+        if self._initialized:
             return
 
-        self._try_load_lhm()
+        self._computer: Any = None
+        self._sensor_mapper: CachedSensorMapper = CachedSensorMapper()
+        self._available: bool = False
+        self._cpu_names: list[str] = []
+        self._gpu_names: list[str] = []
+        self._init_lock: threading.Lock = threading.Lock()
 
-    def _try_load_lhm(self) -> None:
+        self._init_lhm()
+        self._initialized = True
+
+    def _init_lhm(self) -> None:
+        if not IS_WINDOWS or clr is None:
+            return
+
         try:
-            dll_paths = [
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "libs", "LibreHardwareMonitorLib.dll"),
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "LibreHardwareMonitorLib.dll"),
-                os.path.join(
-                    os.getcwd(),
-                    "libs", "LibreHardwareMonitorLib.dll"),
-                os.path.join(
-                    os.getcwd(),
-                    "LibreHardwareMonitorLib.dll"),
-                "libs/LibreHardwareMonitorLib.dll",
-                "LibreHardwareMonitorLib.dll",
-            ]
-
-            dll_loaded = False
-            for dll_path in dll_paths:
-                if os.path.exists(dll_path):
-                    try:
-                        clr.AddReference(dll_path)  # type: ignore
-                        dll_loaded = True
-                        break
-                    except Exception:
-                        continue
-
-            if not dll_loaded:
-                try:
-                    clr.AddReference("LibreHardwareMonitorLib")  # type: ignore
-                    dll_loaded = True
-                except Exception:
-                    return
-
-            try:
-                from LibreHardwareMonitor.Hardware import (  # type: ignore
-                    Computer,
-                    HardwareType,
-                    SensorType,
-                )
-                self.SensorType = SensorType
-                self.HardwareType = HardwareType
-            except Exception:
+            dll_path = self._find_lhm_dll()
+            if not dll_path:
                 return
 
-            try:
-                pc = Computer()
-                pc.IsCpuEnabled = True
-                pc.IsGpuEnabled = True
-                pc.IsMemoryEnabled = True
-                pc.IsMotherboardEnabled = True
-                pc.IsStorageEnabled = True
+            clr.AddReference(dll_path)
+            from LibreHardwareMonitor.Hardware import Computer
 
-                try:
-                    pc.IsControllerEnabled = False
-                    pc.IsNetworkEnabled = False
-                    pc.IsPsuEnabled = False
-                    pc.IsSuperIOEnabled = True
-                except Exception:
-                    pass
+            self._computer = Computer()
+            self._computer.IsCpuEnabled = True
+            self._computer.IsGpuEnabled = True
+            self._computer.IsMemoryEnabled = True
+            self._computer.IsMotherboardEnabled = True
+            self._computer.IsStorageEnabled = True
+            self._computer.Open()
 
-            except Exception:
-                return
+            hw_list = list(self._computer.Hardware)
+            self._sensor_mapper.set_hardware_list(hw_list)
 
-            try:
-                pc.Open()
-                self.pc = pc
-                self.ok = True
+            for hw in hw_list:
+                hw_type = str(hw.HardwareType)
+                if 'Cpu' in hw_type:
+                    self._cpu_names.append(str(hw.Name))
+                elif 'Gpu' in hw_type:
+                    self._gpu_names.append(str(hw.Name))
 
-                self.sensor_mapper.set_hardware_list(pc.Hardware)
-                self.sensor_mapper.update_sensors_if_needed()
-
-            except Exception as e:
-                if "HidSharp" in str(e) or "Controller" in str(e):
-                    if self._try_partial_initialization():
-                        return
-                self.ok = False
-
+            self._available = True
         except Exception:
-            self.ok = False
+            self._available = False
 
-    def _try_partial_initialization(self) -> bool:
+    def _find_lhm_dll(self) -> str | None:
+        import sys
+        
+        # 获取基础路径（兼容打包和开发环境）
+        if getattr(sys, 'frozen', False):
+            # PyInstaller 打包后
+            base_path = sys._MEIPASS
+        else:
+            # 开发环境
+            base_path = os.path.dirname(__file__)
+        
+        search_paths = [
+            # libs 子目录（推荐位置）
+            os.path.join(base_path, 'libs', 'LibreHardwareMonitorLib.dll'),
+            # 同级目录
+            os.path.join(base_path, 'LibreHardwareMonitorLib.dll'),
+            # 开发环境：项目根目录的 libs
+            os.path.join(os.path.dirname(__file__), 'libs', 'LibreHardwareMonitorLib.dll'),
+            # 当前工作目录
+            os.path.join(os.getcwd(), 'LibreHardwareMonitorLib.dll'),
+            os.path.join(os.getcwd(), 'libs', 'LibreHardwareMonitorLib.dll'),
+            # 系统安装位置
+            r'C:\Program Files\LibreHardwareMonitor\LibreHardwareMonitorLib.dll',
+            r'C:\Program Files (x86)\LibreHardwareMonitor\LibreHardwareMonitorLib.dll',
+        ]
+        
+        for p in search_paths:
+            if os.path.exists(p):
+                return p
+        return None
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    def get_cpu_temp(self) -> float | None:
+        if not self._available:
+            return None
+        return self._sensor_mapper.get_sensor('Cpu', None, 'Temperature')
+
+    def get_cpu_power(self) -> float | None:
+        if not self._available:
+            return None
+        return self._sensor_mapper.get_sensor('Cpu', None, 'Power', 'CPU Package')
+
+    def get_cpu_clock(self) -> float | None:
+        if not self._available:
+            return None
+        clocks = self._sensor_mapper.get_all_sensors_of_type('Cpu', 'Clock')
+        core_clocks = [c[2] for c in clocks if 'Core' in c[1]]
+        return sum(core_clocks) / len(core_clocks) if core_clocks else None
+
+    def get_cpu_load(self) -> float | None:
+        if not self._available:
+            return None
+        return self._sensor_mapper.get_sensor(
+            'Cpu', None, 'Load', 'CPU Total')
+
+    def get_gpu_temp(self, idx: int = 0) -> float | None:
+        if not self._available or idx >= len(self._gpu_names):
+            return None
+        return self._sensor_mapper.get_sensor(
+            'GpuNvidia', self._gpu_names[idx], 'Temperature') or \
+            self._sensor_mapper.get_sensor(
+                'GpuAmd', self._gpu_names[idx], 'Temperature') or \
+            self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'Temperature')
+
+    def get_gpu_power(self, idx: int = 0) -> float | None:
+        if not self._available or idx >= len(self._gpu_names):
+            return None
+        return self._sensor_mapper.get_sensor(
+            'GpuNvidia', self._gpu_names[idx], 'Power') or \
+            self._sensor_mapper.get_sensor(
+                'GpuAmd', self._gpu_names[idx], 'Power') or \
+            self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'Power')
+
+    def get_gpu_clock(self, idx: int = 0) -> float | None:
+        if not self._available or idx >= len(self._gpu_names):
+            return None
+        return self._sensor_mapper.get_sensor(
+            'GpuNvidia', self._gpu_names[idx], 'Clock', 'GPU Core') or \
+            self._sensor_mapper.get_sensor(
+                'GpuAmd', self._gpu_names[idx], 'Clock', 'GPU Core') or \
+            self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'Clock', 'GPU Core') or \
+            self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'Clock')
+
+    def get_gpu_load(self, idx: int = 0) -> float | None:
+        if not self._available or idx >= len(self._gpu_names):
+            return None
+        return self._sensor_mapper.get_sensor(
+            'GpuNvidia', self._gpu_names[idx], 'Load', 'GPU Core') or \
+            self._sensor_mapper.get_sensor(
+                'GpuAmd', self._gpu_names[idx], 'Load', 'GPU Core') or \
+            self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'Load', 'GPU Core') or \
+            self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'Load', 'D3D 3D') or \
+            self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'Load')
+
+    def get_gpu_mem_used(self, idx: int = 0) -> int | None:
+        if not self._available or idx >= len(self._gpu_names):
+            return None
+        # 尝试从不同GPU类型获取显存使用量
+        val = self._sensor_mapper.get_sensor(
+            'GpuNvidia', self._gpu_names[idx], 'SmallData', 'GPU Memory Used')
+        if val is None:
+            val = self._sensor_mapper.get_sensor(
+                'GpuAmd', self._gpu_names[idx], 'SmallData', 'GPU Memory Used')
+        if val is None:
+            val = self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'SmallData', 'GPU Memory Used')
+        if val is None:
+            # Intel核显可能使用D3D共享内存
+            val = self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'SmallData', 'D3D Shared Memory Used')
+        if val is None:
+            val = self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'SmallData')
+        return int(val * 1024 * 1024) if val else None
+
+    def get_gpu_mem_total(self, idx: int = 0) -> int | None:
+        if not self._available or idx >= len(self._gpu_names):
+            return None
+        # 尝试从不同GPU类型获取显存总量
+        val = self._sensor_mapper.get_sensor(
+            'GpuNvidia', self._gpu_names[idx], 'SmallData', 'GPU Memory Total')
+        if val is None:
+            val = self._sensor_mapper.get_sensor(
+                'GpuAmd', self._gpu_names[idx], 'SmallData', 'GPU Memory Total')
+        if val is None:
+            val = self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'SmallData', 'GPU Memory Total')
+        if val is None:
+            # Intel核显可能使用共享内存总量
+            val = self._sensor_mapper.get_sensor(
+                'GpuIntel', self._gpu_names[idx], 'SmallData', 'D3D Shared Memory Total')
+        return int(val * 1024 * 1024) if val else None
+
+    def get_memory_load(self) -> float | None:
+        if not self._available:
+            return None
+        return self._sensor_mapper.get_sensor('Memory', None, 'Load')
+
+    def get_memory_clock(self) -> float | None:
+        """获取内存频率 (MHz)"""
+        # 首先尝试从 LHM 获取
+        if self._available:
+            freq = self._sensor_mapper.get_sensor('Memory', None, 'Clock')
+            if freq is not None:
+                return freq
+        
+        # 后备：使用 WMI 获取
+        return self._get_memory_clock_wmi()
+
+    def _get_memory_clock_wmi(self) -> float | None:
+        """通过 WMI 获取内存频率"""
+        if wmi_module is None:
+            return None
         try:
-            from LibreHardwareMonitor.Hardware import Computer  # type: ignore
-            safe_pc = Computer()
-            safe_pc.IsCpuEnabled = True
-            safe_pc.IsGpuEnabled = True
-            safe_pc.IsMemoryEnabled = True
-            safe_pc.IsMotherboardEnabled = True
-            safe_pc.IsStorageEnabled = True
-
-            safe_pc.IsControllerEnabled = False
-            safe_pc.IsNetworkEnabled = False
-            safe_pc.IsPsuEnabled = False
-            safe_pc.IsSuperIOEnabled = False
-
-            safe_pc.Open()
-            self.pc = safe_pc
-            self.ok = True
-            self.partial_load = True
-
-            self.sensor_mapper.set_hardware_list(safe_pc.Hardware)
-            self.sensor_mapper.update_sensors_if_needed()
-
-            return True
-
-        except Exception:
-            return False
-
-    def get_cpu_info(self) -> dict[str, Any]:
-        if not self.ok:
-            return {
-                "name": "CPU", "usage": None, "temp": None,
-                "power": None, "clock_mhz": None}
-
-        cpu_name: str = "CPU"
-        try:
-            for hw in self.pc.Hardware:
-                if hw.HardwareType == self.HardwareType.Cpu:
-                    cpu_name = str(hw.Name)
-                    break
+            w = wmi_module.WMI()
+            speeds: list[int] = []
+            for mem in w.Win32_PhysicalMemory():
+                if mem.Speed:
+                    speeds.append(int(mem.Speed))
+            if speeds:
+                return float(max(speeds))  # 返回最高频率 (MT/s)
         except Exception:
             pass
+        return None
 
-        cpu_usage = self.sensor_mapper.get_sensor_value(
-            'Cpu', 'Load',
-            ['cpu total', 'total'],
-            ['cpu', 'load']
-        )
+    def get_gpu_names(self) -> list[str]:
+        return self._gpu_names.copy()
 
-        cpu_temp = self.sensor_mapper.get_sensor_value(
-            'Cpu', 'Temperature',
-            ['package', 'tctl', 'tdie'],
-            ['cpu', 'core']
-        )
+    def get_cpu_names(self) -> list[str]:
+        return self._cpu_names.copy()
 
-        cpu_power = self.sensor_mapper.get_sensor_value(
-            'Cpu', 'Power',
-            ['package', 'cpu package'],
-            ['cpu', 'total']
-        )
-
-        cpu_clocks = self.sensor_mapper.get_all_sensor_values(
-            'Cpu', 'Clock',
-            ['core', 'cpu']
-        )
-
-        cpu_clock: float | None = max(cpu_clocks) if cpu_clocks else None
-
+    def get_cpu_info(self) -> dict[str, Any]:
+        """获取CPU信息"""
+        name = self._cpu_names[0] if self._cpu_names else "Unknown CPU"
         return {
-            "name": cpu_name,
-            "usage": cpu_usage,
-            "temp": cpu_temp,
-            "power": cpu_power,
-            "clock_mhz": cpu_clock
+            "name": name,
+            "usage": self.get_cpu_load(),
+            "temp": self.get_cpu_temp(),
+            "power": self.get_cpu_power(),
+            "clock_mhz": self.get_cpu_clock()
+        }
+
+    def get_gpu_info(self, idx: int = 0) -> dict[str, Any]:
+        """获取GPU信息"""
+        name = self._gpu_names[idx] if idx < len(self._gpu_names) else "Unknown GPU"
+        return {
+            "name": name,
+            "util": self.get_gpu_load(idx),
+            "temp": self.get_gpu_temp(idx),
+            "clock_mhz": self.get_gpu_clock(idx),
+            "mem_used_b": self.get_gpu_mem_used(idx),
+            "mem_total_b": self.get_gpu_mem_total(idx),
+            "power": self.get_gpu_power(idx)
         }
 
     def get_gpu_list(self) -> list[str]:
-        if not self.ok:
-            return ["未检测到GPU"]
-
-        gpu_list: list[str] = []
-        gpu_types = ['GpuNvidia', 'GpuAmd', 'GpuIntel']
-        for gpu_type in gpu_types:
-            if gpu_type in self.sensor_mapper.sensor_data:
-                gpu_data = self.sensor_mapper.sensor_data[gpu_type]
-                for gpu_name in gpu_data.keys():
-                    gpu_list.append(gpu_name)
-
-        return gpu_list if gpu_list else ["未检测到GPU"]
-
-    def get_gpu_info(self, gpu_index: int = 0) -> dict[str, Any]:
-        if not self.ok:
-            return {
-                "name": "GPU", "util": None, "temp": None, "clock_mhz": None,
-                "mem_used_b": None, "mem_total_b": None, "power": None}
-
-        gpu_list: list[tuple[str, str, dict[str, Any]]] = []
-        gpu_types = ['GpuNvidia', 'GpuAmd', 'GpuIntel']
-
-        for gpu_type in gpu_types:
-            if gpu_type in self.sensor_mapper.sensor_data:
-                for gpu_name, gpu_info in \
-                        self.sensor_mapper.sensor_data[gpu_type].items():
-                    gpu_list.append((gpu_type, gpu_name, gpu_info))
-
-        if not gpu_list or gpu_index >= len(gpu_list):
-            return {
-                "name": "GPU", "util": None, "temp": None, "clock_mhz": None,
-                "mem_used_b": None, "mem_total_b": None, "power": None}
-
-        gpu_type, gpu_name, gpu_info = gpu_list[gpu_index]
-
-        gpu_util = self.sensor_mapper.get_sensor_value(
-            gpu_type, 'Load',
-            ['core', 'gpu core', '3d'],
-            ['gpu', 'load']
-        )
-
-        gpu_temp = self.sensor_mapper.get_sensor_value(
-            gpu_type, 'Temperature',
-            ['core', 'gpu core'],
-            ['gpu', 'temp']
-        )
-
-        gpu_clock = self.sensor_mapper.get_sensor_value(
-            gpu_type, 'Clock',
-            ['core', 'gpu core'],
-            ['gpu', 'clock']
-        )
-
-        gpu_power = self.sensor_mapper.get_sensor_value(
-            gpu_type, 'Power',
-            ['gpu power', 'total'],
-            ['gpu', 'power']
-        )
-
-        gpu_mem_used_raw = self.sensor_mapper.get_sensor_value(
-            gpu_type, 'SmallData',
-            ['memory used', 'gpu memory used'],
-            ['used', 'memory']
-        )
-
-        gpu_mem_total_raw = self.sensor_mapper.get_sensor_value(
-            gpu_type, 'SmallData',
-            ['memory total', 'gpu memory total'],
-            ['total', 'memory']
-        )
-
-        gpu_mem_used = convert_memory_to_bytes(
-            gpu_mem_used_raw, data_type="gpu_mem")
-        gpu_mem_total = convert_memory_to_bytes(
-            gpu_mem_total_raw, data_type="gpu_mem")
-
-        valid_used = validate_memory_value(gpu_mem_used, (0.4, 128))
-        if gpu_mem_used and not valid_used:
-            gpu_mem_used = None
-
-        if gpu_mem_total and not validate_memory_value(
-                gpu_mem_total, (0.4, 128)):
-            gpu_mem_total = None
-
-        return {
-            "name": gpu_name,
-            "util": gpu_util,
-            "temp": gpu_temp,
-            "clock_mhz": gpu_clock,
-            "mem_used_b": gpu_mem_used,
-            "mem_total_b": gpu_mem_total,
-            "power": gpu_power
-        }
+        """获取GPU列表"""
+        return self._gpu_names.copy()
 
     def get_memory_info(self) -> dict[str, Any]:
-        if not self.ok:
-            vm = psutil.virtual_memory()
-            return {
-                "used_b": vm.used,
-                "total_b": vm.total,
-                "percent": vm.percent,
-                "freq_mhz": None
-            }
-
-        mem_percent = self.sensor_mapper.get_sensor_value(
-            'Memory', 'Load',
-            ['memory'],
-            ['load']
-        )
-
-        mem_used_raw = self.sensor_mapper.get_sensor_value(
-            'Memory', 'Data',
-            ['memory used'],
-            ['used']
-        )
-
-        mem_total_raw = self.sensor_mapper.get_sensor_value(
-            'Memory', 'Data',
-            ['memory total'],
-            ['total']
-        )
-
-        mem_used = convert_memory_to_bytes(
-            mem_used_raw, data_type="system_mem")
-        mem_total = convert_memory_to_bytes(
-            mem_total_raw, data_type="system_mem")
-
-        vm = psutil.virtual_memory()
-
-        use_fallback = (
-            mem_used is None or mem_total is None
-            or not validate_memory_value(mem_used, (0.5, 1024))
-            or not validate_memory_value(mem_total, (1, 1024))
-            or mem_used > mem_total
-            or abs(mem_used - mem_total) < (mem_total * 0.01)
-        )
-        if use_fallback:
-            mem_percent = vm.percent
-            mem_used = vm.used
-            mem_total = vm.total
-        else:
-            if mem_percent is None and mem_total > 0:
-                mem_percent = (mem_used / mem_total) * 100
-
-        if not hasattr(self, '_cached_mem_freq'):
-            try:
-                if wmi_module:
-                    w = wmi_module.WMI()
-                    speeds: list[int] = []
-                    for m in w.Win32_PhysicalMemory():
-                        if m.Speed:
-                            speeds.append(int(m.Speed))
-                    self._cached_mem_freq: int | None = (
-                        max(speeds) if speeds else None)
-                else:
-                    self._cached_mem_freq = None
-            except Exception:
-                self._cached_mem_freq = None
-
+        """获取内存信息"""
+        mem = psutil.virtual_memory()
+        freq_mhz = self.get_memory_clock() if self._available else None
         return {
-            "used_b": mem_used,
-            "total_b": mem_total,
-            "percent": mem_percent,
-            "freq_mhz": self._cached_mem_freq
+            "used_b": mem.used,
+            "total_b": mem.total,
+            "percent": mem.percent,
+            "freq_mhz": freq_mhz
         }
 
 
 # =============================================================================
-# macOS 硬件监控 (增强版)
+# macOS Apple Silicon 监控 (使用 macmon CLI 后台采样)
+# =============================================================================
+
+class AppleSiliconMonitor:
+    """Apple Silicon 性能监控器
+    
+    使用后台线程运行 macmon 持续采样，避免阻塞 UI。
+    """
+
+    def __init__(self) -> None:
+        self._macmon_available: bool = self._check_macmon()
+        self._last_metrics: dict[str, Any] = {}
+        self._lock = threading.Lock()
+        self._running: bool = False
+        self._thread: threading.Thread | None = None
+        self._process: subprocess.Popen | None = None
+        
+        # 如果 macmon 可用，启动后台采样线程
+        if self._macmon_available:
+            self._start_background_sampling()
+        else:
+            self._init_ioreport()
+
+    def _check_macmon(self) -> bool:
+        """检查 macmon 是否可用"""
+        # 常见的 macmon 安装路径
+        macmon_paths = [
+            '/opt/homebrew/bin/macmon',  # Apple Silicon Homebrew
+            '/usr/local/bin/macmon',      # Intel Homebrew
+            'macmon',                      # PATH 中（开发环境）
+        ]
+        
+        for path in macmon_paths:
+            try:
+                result = subprocess.run(
+                    [path, '--version'],
+                    capture_output=True, timeout=5)
+                if result.returncode == 0:
+                    self._macmon_path = path  # 保存找到的路径
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _start_background_sampling(self) -> None:
+        """启动后台采样线程"""
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._sampling_loop, daemon=True)
+        self._thread.start()
+
+    def _sampling_loop(self) -> None:
+        """后台采样循环"""
+        macmon_cmd = getattr(self, '_macmon_path', 'macmon')
+        while self._running:
+            try:
+                self._process = subprocess.Popen(
+                    [macmon_cmd, '-i', '1000', 'pipe'],  # 使用完整路径
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    bufsize=1
+                )
+                
+                # 持续读取输出
+                for line in iter(self._process.stdout.readline, ''):
+                    if not self._running:
+                        break
+                    line = line.strip()
+                    if line:
+                        try:
+                            metrics = json.loads(line)
+                            with self._lock:
+                                self._last_metrics = metrics
+                        except json.JSONDecodeError:
+                            pass
+                
+                self._process.stdout.close()
+                self._process.wait()
+                
+            except Exception:
+                pass
+            
+            # 如果进程意外退出，等待一会再重启
+            if self._running:
+                time.sleep(1)
+
+    def stop(self) -> None:
+        """停止后台采样"""
+        self._running = False
+        if self._process:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=2)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+        if self._thread:
+            self._thread.join(timeout=2)
+
+    def _init_ioreport(self) -> None:
+        """初始化 IOReport API (备用方案)"""
+        self._ioreport_available = False
+        try:
+            self._cf = ctypes.CDLL(
+                '/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation')
+            self._iokit = ctypes.CDLL(
+                '/System/Library/Frameworks/IOKit.framework/IOKit')
+            
+            self._iokit.IOHIDEventSystemClientCreate.argtypes = [c_void_p]
+            self._iokit.IOHIDEventSystemClientCreate.restype = c_void_p
+            
+            self._iokit.IOHIDEventSystemClientCopyServices.argtypes = [c_void_p]
+            self._iokit.IOHIDEventSystemClientCopyServices.restype = c_void_p
+            
+            self._iokit.IOHIDServiceClientCopyProperty.argtypes = [c_void_p, c_void_p]
+            self._iokit.IOHIDServiceClientCopyProperty.restype = c_void_p
+            
+            self._iokit.IOHIDServiceClientCopyEvent.argtypes = [c_void_p, c_int64, c_int64, c_int64]
+            self._iokit.IOHIDServiceClientCopyEvent.restype = c_void_p
+            
+            self._iokit.IOHIDEventGetFloatValue.argtypes = [c_void_p, c_uint32]
+            self._iokit.IOHIDEventGetFloatValue.restype = c_double
+            
+            self._cf.CFArrayGetCount.argtypes = [c_void_p]
+            self._cf.CFArrayGetCount.restype = c_int64
+            
+            self._cf.CFArrayGetValueAtIndex.argtypes = [c_void_p, c_int64]
+            self._cf.CFArrayGetValueAtIndex.restype = c_void_p
+            
+            self._cf.CFStringCreateWithCString.argtypes = [c_void_p, c_char_p, c_uint32]
+            self._cf.CFStringCreateWithCString.restype = c_void_p
+            
+            self._cf.CFStringGetCString.argtypes = [c_void_p, c_char_p, c_int64, c_uint32]
+            self._cf.CFStringGetCString.restype = ctypes.c_bool
+            
+            self._cf.CFRelease.argtypes = [c_void_p]
+            self._cf.CFRelease.restype = None
+            
+            self._kCFStringEncodingUTF8 = 0x08000100
+            self._kIOHIDEventTypeTemperature = 15
+            
+            self._ioreport_available = True
+        except Exception:
+            self._ioreport_available = False
+
+    def _get_iohid_temperatures(self) -> dict[str, float]:
+        """通过 IOHID API 获取温度传感器数据"""
+        temps: dict[str, float] = {}
+        if not self._ioreport_available:
+            return temps
+            
+        try:
+            system = self._iokit.IOHIDEventSystemClientCreate(None)
+            if not system:
+                return temps
+                
+            services = self._iokit.IOHIDEventSystemClientCopyServices(system)
+            if not services:
+                self._cf.CFRelease(system)
+                return temps
+                
+            count = self._cf.CFArrayGetCount(services)
+            product_key = self._cf.CFStringCreateWithCString(
+                None, b"Product", self._kCFStringEncodingUTF8)
+            
+            for i in range(count):
+                sc = self._cf.CFArrayGetValueAtIndex(services, i)
+                if not sc:
+                    continue
+                    
+                name_cf = self._iokit.IOHIDServiceClientCopyProperty(sc, product_key)
+                if not name_cf:
+                    continue
+                    
+                name_buf = ctypes.create_string_buffer(256)
+                if self._cf.CFStringGetCString(name_cf, name_buf, 256, self._kCFStringEncodingUTF8):
+                    name = name_buf.value.decode('utf-8')
+                else:
+                    name = ""
+                self._cf.CFRelease(name_cf)
+                
+                if not name:
+                    continue
+                    
+                event = self._iokit.IOHIDServiceClientCopyEvent(
+                    sc, self._kIOHIDEventTypeTemperature, 0, 0)
+                if event:
+                    field = self._kIOHIDEventTypeTemperature << 16
+                    temp = self._iokit.IOHIDEventGetFloatValue(event, field)
+                    if 0 < temp < 150:
+                        temps[name] = temp
+                    self._cf.CFRelease(event)
+                    
+            self._cf.CFRelease(product_key)
+            self._cf.CFRelease(services)
+            self._cf.CFRelease(system)
+            
+        except Exception:
+            pass
+            
+        return temps
+
+    def _get_metrics(self) -> dict[str, Any]:
+        """获取当前缓存的指标数据"""
+        with self._lock:
+            return self._last_metrics.copy()
+
+    @property
+    def cpu_power(self) -> float | None:
+        """CPU 功耗 (瓦特)"""
+        return self._get_metrics().get('cpu_power')
+
+    @property
+    def gpu_power(self) -> float | None:
+        """GPU 功耗 (瓦特)"""
+        return self._get_metrics().get('gpu_power')
+
+    @property
+    def cpu_freq_mhz(self) -> float | None:
+        """CPU 频率 (MHz) - P-cluster"""
+        metrics = self._get_metrics()
+        pcpu = metrics.get('pcpu_usage')
+        if pcpu and isinstance(pcpu, list) and len(pcpu) >= 1:
+            return pcpu[0]
+        ecpu = metrics.get('ecpu_usage')
+        if ecpu and isinstance(ecpu, list) and len(ecpu) >= 1:
+            return ecpu[0]
+        return None
+
+    @property
+    def gpu_freq_mhz(self) -> float | None:
+        """GPU 频率 (MHz)"""
+        metrics = self._get_metrics()
+        gpu = metrics.get('gpu_usage')
+        if gpu and isinstance(gpu, list) and len(gpu) >= 1:
+            return gpu[0]
+        return None
+
+    @property
+    def cpu_usage(self) -> float | None:
+        """CPU 使用率 (%) - 基于 residency"""
+        metrics = self._get_metrics()
+        pcpu = metrics.get('pcpu_usage')
+        ecpu = metrics.get('ecpu_usage')
+        
+        usages = []
+        if pcpu and isinstance(pcpu, list) and len(pcpu) >= 2:
+            usages.append(pcpu[1] * 100)
+        if ecpu and isinstance(ecpu, list) and len(ecpu) >= 2:
+            usages.append(ecpu[1] * 100)
+            
+        if usages:
+            return max(usages)
+        return None
+
+    @property
+    def gpu_usage(self) -> float | None:
+        """GPU 使用率 (%)"""
+        metrics = self._get_metrics()
+        gpu = metrics.get('gpu_usage')
+        if gpu and isinstance(gpu, list) and len(gpu) >= 2:
+            return gpu[1] * 100
+        return None
+
+    def get_cpu_temperature(self) -> float | None:
+        """获取 CPU 平均温度"""
+        metrics = self._get_metrics()
+        temp_data = metrics.get('temp', {})
+        if isinstance(temp_data, dict):
+            return temp_data.get('cpu_temp_avg')
+        
+        # 备用: 从 IOHID 温度数据
+        if not self._macmon_available and self._ioreport_available:
+            temps = self._get_iohid_temperatures()
+            cpu_temps = []
+            for name, temp in temps.items():
+                name_lower = name.lower()
+                if any(k in name_lower for k in ['cpu', 'soc', 'die', 'pmu']):
+                    if 'gpu' not in name_lower:
+                        cpu_temps.append(temp)
+            if cpu_temps:
+                return sum(cpu_temps) / len(cpu_temps)
+        return None
+
+    def get_gpu_temperature(self) -> float | None:
+        """获取 GPU 平均温度"""
+        metrics = self._get_metrics()
+        temp_data = metrics.get('temp', {})
+        if isinstance(temp_data, dict):
+            return temp_data.get('gpu_temp_avg')
+        
+        # 备用: 从 IOHID 温度数据
+        if not self._macmon_available and self._ioreport_available:
+            temps = self._get_iohid_temperatures()
+            gpu_temps = []
+            for name, temp in temps.items():
+                name_lower = name.lower()
+                if 'gpu' in name_lower:
+                    gpu_temps.append(temp)
+            if gpu_temps:
+                return sum(gpu_temps) / len(gpu_temps)
+        return None
+
+    def is_available(self) -> bool:
+        """检查是否可用"""
+        return self._macmon_available or getattr(self, '_ioreport_available', False)
+
+
+# =============================================================================
+# macOS 硬件监控
 # =============================================================================
 
 class MacOSHardwareMonitor:
-    """macOS 硬件监控实现 - 增强版"""
+    """macOS 硬件监控实现 - 支持 Apple Silicon"""
 
     def __init__(self) -> None:
         self._cpu_name: str | None = None
         self._gpu_info_cache: list[dict[str, Any]] | None = None
         self._gpu_info_time: float = 0
         self._is_apple_silicon: bool = self._detect_apple_silicon()
-        self._powermetrics_available: bool = self._check_powermetrics()
         self._last_cpu_temp: float | None = None
-        self._last_gpu_info: dict[str, Any] = {}
+        self._last_gpu_temp: float | None = None
+
+        # Apple Silicon 专用监控
+        self._apple_monitor: AppleSiliconMonitor | None = None
+        if self._is_apple_silicon:
+            try:
+                self._apple_monitor = AppleSiliconMonitor()
+                if not self._apple_monitor.is_available():
+                    self._apple_monitor = None
+            except Exception:
+                self._apple_monitor = None
 
     def _detect_apple_silicon(self) -> bool:
         """检测是否为 Apple Silicon"""
@@ -652,10 +817,6 @@ class MacOSHardwareMonitor:
             pass
         return platform.processor() == 'arm'
 
-    def _check_powermetrics(self) -> bool:
-        """检查 powermetrics 是否可用 (需要 sudo)"""
-        return os.path.exists('/usr/bin/powermetrics')
-
     def _run_cmd(self, cmd: list[str], timeout: int = 5) -> str | None:
         """运行命令并返回输出"""
         try:
@@ -666,72 +827,74 @@ class MacOSHardwareMonitor:
             return None
 
     def get_cpu_info(self) -> dict[str, Any]:
-        # CPU名称
+        """获取 CPU 信息"""
         if self._cpu_name is None:
-            output = self._run_cmd(
-                ['sysctl', '-n', 'machdep.cpu.brand_string'])
+            output = self._run_cmd(['sysctl', '-n', 'machdep.cpu.brand_string'])
             if output:
                 self._cpu_name = output.strip()
             else:
-                # Apple Silicon fallback
                 output = self._run_cmd(['sysctl', '-n', 'hw.model'])
                 self._cpu_name = output.strip() if output else "Apple CPU"
 
-        # CPU使用率
         usage: float | None = psutil.cpu_percent(interval=None)
-
-        # CPU频率
-        freq = psutil.cpu_freq()
-        clock_mhz: float | None = freq.current if freq else None
-
-        # Apple Silicon: 尝试获取性能核心频率
-        if self._is_apple_silicon and clock_mhz is None:
-            # Apple Silicon 没有传统频率概念
-            clock_mhz = None
-
-        # CPU温度
-        temp: float | None = self._get_cpu_temp()
-
-        # CPU功耗 (Apple Silicon via powermetrics 或其他方式)
+        clock_mhz: float | None = None
+        temp: float | None = None
         power: float | None = None
+
+        if self._is_apple_silicon and self._apple_monitor:
+            clock_mhz = self._apple_monitor.cpu_freq_mhz
+            power = self._apple_monitor.cpu_power
+            temp = self._apple_monitor.get_cpu_temperature()
+            
+            # 可以使用 IOReport 的使用率，但 psutil 更稳定
+            # apple_usage = self._apple_monitor.cpu_usage
+            # if apple_usage is not None:
+            #     usage = apple_usage
+
+            if temp:
+                self._last_cpu_temp = temp
+
+        # 后备方案
+        if clock_mhz is None:
+            freq = psutil.cpu_freq()
+            clock_mhz = freq.current if freq else None
+
+        if temp is None:
+            temp = self._get_cpu_temp_fallback()
 
         return {
             "name": self._cpu_name,
             "usage": usage,
-            "temp": temp,
+            "temp": temp or self._last_cpu_temp,
             "power": power,
             "clock_mhz": clock_mhz
         }
 
-    def _get_cpu_temp(self) -> float | None:
-        """获取 CPU 温度 - 多种方法尝试"""
-        # 方法1: osx-cpu-temp (第三方工具)
+    def _get_cpu_temp_fallback(self) -> float | None:
+        """后备温度获取方法"""
         output = self._run_cmd(['osx-cpu-temp'])
         if output:
             match = re.search(r'(\d+\.?\d*)', output)
             if match:
                 return float(match.group(1))
 
-        # 方法2: 使用 istats (如果安装了)
         output = self._run_cmd(['istats', '--no-graphs'])
         if output:
             match = re.search(r'CPU temp:\s*(\d+\.?\d*)', output)
             if match:
                 return float(match.group(1))
 
-        # 方法3: Apple Silicon 使用 ioreg (有限制)
-        # Apple Silicon 温度通常需要特殊工具
-
-        return self._last_cpu_temp
+        return None
 
     def get_gpu_list(self) -> list[str]:
+        """获取 GPU 列表"""
         self._update_gpu_info()
         if self._gpu_info_cache:
             return [g["name"] for g in self._gpu_info_cache]
         return ["Integrated GPU"]
 
     def _update_gpu_info(self) -> None:
-        """使用 system_profiler 获取GPU信息"""
+        """使用 system_profiler 获取 GPU 信息"""
         if self._gpu_info_cache and time.time() - self._gpu_info_time < 60:
             return
 
@@ -746,7 +909,6 @@ class MacOSHardwareMonitor:
                 for display in displays:
                     gpu_name: str = display.get('sppci_model', 'Unknown GPU')
 
-                    # Apple Silicon: GPU 集成在 SoC 中
                     if 'Apple' in gpu_name or self._is_apple_silicon:
                         chip_type = display.get('sppci_model', 'Apple GPU')
                         cores = display.get('sppci_cores', '')
@@ -755,24 +917,20 @@ class MacOSHardwareMonitor:
 
                     vram = display.get('spdisplays_vram', '0')
                     vram_bytes: int = 0
-                    match = re.search(
-                        r'(\d+)\s*(GB|MB)', str(vram), re.IGNORECASE)
+                    match = re.search(r'(\d+)\s*(GB|MB)', str(vram), re.IGNORECASE)
                     if match:
                         size = int(match.group(1))
                         unit = match.group(2).upper()
-                        vram_bytes = size * (
-                            1024**3 if unit == "GB" else 1024**2)
+                        vram_bytes = size * (1024**3 if unit == "GB" else 1024**2)
 
-                    # Apple Silicon: 共享内存
                     if self._is_apple_silicon and vram_bytes == 0:
                         mem = psutil.virtual_memory()
-                        vram_bytes = mem.total  # 共享统一内存
+                        vram_bytes = mem.total
 
                     self._gpu_info_cache.append({
                         "name": gpu_name,
                         "mem_total_b": vram_bytes,
-                        "is_integrated": (
-                            self._is_apple_silicon or 'Intel' in gpu_name)
+                        "is_integrated": (self._is_apple_silicon or 'Intel' in gpu_name)
                     })
 
                 self._gpu_info_time = time.time()
@@ -788,32 +946,41 @@ class MacOSHardwareMonitor:
             }]
 
     def get_gpu_info(self, gpu_index: int = 0) -> dict[str, Any]:
+        """获取 GPU 信息"""
         self._update_gpu_info()
 
         gpu: dict[str, Any] = {}
         if self._gpu_info_cache and gpu_index < len(self._gpu_info_cache):
             gpu = self._gpu_info_cache[gpu_index]
 
-        # Apple Silicon: GPU 利用率 (尝试通过 Activity Monitor 或 powermetrics)
         util: float | None = None
         temp: float | None = None
         power: float | None = None
+        clock_mhz: float | None = None
         mem_used: float | None = None
+
+        if self._is_apple_silicon and self._apple_monitor:
+            util = self._apple_monitor.gpu_usage
+            power = self._apple_monitor.gpu_power
+            clock_mhz = self._apple_monitor.gpu_freq_mhz
+            temp = self._apple_monitor.get_gpu_temperature()
+
+            if temp:
+                self._last_gpu_temp = temp
 
         return {
             "name": gpu.get("name", "Unknown GPU"),
             "util": util,
-            "temp": temp,
-            "clock_mhz": None,
+            "temp": temp or self._last_gpu_temp,
+            "clock_mhz": clock_mhz,
             "mem_used_b": mem_used,
             "mem_total_b": gpu.get("mem_total_b"),
             "power": power
         }
 
     def get_memory_info(self) -> dict[str, Any]:
+        """获取内存信息"""
         mem = psutil.virtual_memory()
-
-        # macOS 内存频率 (通过 system_profiler)
         freq: int | None = self._get_memory_freq()
 
         return {
@@ -840,8 +1007,7 @@ class MacOSHardwareMonitor:
                             speed = mem.get('dimm_speed', '')
                             match = re.search(r'(\d+)', str(speed))
                             if match:
-                                self._cached_mem_freq: int | None = int(
-                                    match.group(1))
+                                self._cached_mem_freq: int | None = int(match.group(1))
                                 return self._cached_mem_freq
             except Exception:
                 pass
@@ -851,21 +1017,34 @@ class MacOSHardwareMonitor:
 
 
 # =============================================================================
-# Linux 硬件监控 (增强版)
+# Linux 硬件监控
 # =============================================================================
 
 class LinuxHardwareMonitor:
-    """Linux 硬件监控实现 - 增强版"""
+    """Linux 硬件监控实现"""
 
     def __init__(self) -> None:
         self._cpu_name: str | None = None
         self._gpu_type: str | None = None  # 'nvidia', 'amd', 'intel', None
-        self._gpu_count: int = 0
-        self._gpu_names: list[str] = []
-        self._detect_gpu()
+        self._detect_gpu_type()
+
+    def _detect_gpu_type(self) -> None:
+        """检测 GPU 类型"""
+        try:
+            result = subprocess.run(
+                ['lspci'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                output = result.stdout.lower()
+                if 'nvidia' in output:
+                    self._gpu_type = 'nvidia'
+                elif 'amd' in output or 'radeon' in output:
+                    self._gpu_type = 'amd'
+                elif 'intel' in output:
+                    self._gpu_type = 'intel'
+        except Exception:
+            pass
 
     def _run_cmd(self, cmd: list[str], timeout: int = 5) -> str | None:
-        """运行命令并返回输出"""
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout)
@@ -873,84 +1052,21 @@ class LinuxHardwareMonitor:
         except Exception:
             return None
 
-    def _detect_gpu(self) -> None:
-        """检测GPU类型和数量"""
-        # 检测 NVIDIA
-        output = self._run_cmd(
-            ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'])
-        if output and output.strip():
-            self._gpu_type = 'nvidia'
-            self._gpu_names = [
-                name.strip()
-                for name in output.strip().split('\n') if name.strip()]
-            self._gpu_count = len(self._gpu_names)
-            return
-
-        # 检测 AMD (通过 rocm-smi)
-        output = self._run_cmd(['rocm-smi', '--showproductname'])
-        if output:
-            self._gpu_type = 'amd'
-            names = re.findall(r'Card series:\s*(.+)', output)
-            if names:
-                self._gpu_names = names
-                self._gpu_count = len(names)
-            return
-
-        # 检测 AMD (通过 amdgpu)
-        if os.path.exists('/sys/class/drm'):
-            for card in os.listdir('/sys/class/drm'):
-                if card.startswith('card') and '-' not in card:
-                    vendor_path = f'/sys/class/drm/{card}/device/vendor'
-                    if os.path.exists(vendor_path):
-                        try:
-                            with open(vendor_path) as f:
-                                vendor = f.read().strip()
-                            if vendor == '0x1002':  # AMD vendor ID
-                                self._gpu_type = 'amd'
-                                self._gpu_names.append(f"AMD GPU {card}")
-                                self._gpu_count = len(self._gpu_names)
-                        except Exception:
-                            pass
-
-        # 检测 Intel 集成 GPU
-        output = self._run_cmd(['lspci'])
-        if output and 'VGA' in output:
-            lines = output.split('\n')
-            for line in lines:
-                if 'VGA' in line and 'Intel' in line:
-                    self._gpu_type = 'intel'
-                    match = re.search(r'Intel.*\[(.*?)\]', line)
-                    if match:
-                        self._gpu_names.append(f"Intel {match.group(1)}")
-                    else:
-                        self._gpu_names.append("Intel Integrated Graphics")
-                    self._gpu_count = len(self._gpu_names)
-
     def get_cpu_info(self) -> dict[str, Any]:
-        # CPU名称
         if self._cpu_name is None:
             try:
-                with open('/proc/cpuinfo') as f:
+                with open('/proc/cpuinfo', 'r') as f:
                     for line in f:
-                        if 'model name' in line:
+                        if line.startswith('model name'):
                             self._cpu_name = line.split(':')[1].strip()
                             break
             except Exception:
-                pass
-            if not self._cpu_name:
-                self._cpu_name = "CPU"
+                self._cpu_name = "Unknown CPU"
 
-        # CPU使用率
         usage: float | None = psutil.cpu_percent(interval=None)
-
-        # CPU频率
         freq = psutil.cpu_freq()
         clock_mhz: float | None = freq.current if freq else None
-
-        # CPU温度 (lm-sensors)
         temp: float | None = self._get_cpu_temp()
-
-        # CPU功耗 (Intel RAPL)
         power: float | None = self._get_cpu_power()
 
         return {
@@ -962,206 +1078,102 @@ class LinuxHardwareMonitor:
         }
 
     def _get_cpu_temp(self) -> float | None:
-        """通过 lm-sensors 或 hwmon 获取CPU温度"""
-        # 方法1: sensors -j (JSON输出)
-        output = self._run_cmd(['sensors', '-j'])
-        if output:
-            try:
-                data = json.loads(output)
-                for chip_name, chip_data in data.items():
-                    if not isinstance(chip_data, dict):
-                        continue
-                    # Intel: coretemp, AMD: k10temp 或 zenpower
-                    keywords = ['coretemp', 'k10temp', 'zenpower']
-                    if any(x in chip_name.lower() for x in keywords):
-                        for sensor_name, sensor_data in chip_data.items():
-                            if isinstance(sensor_data, dict):
-                                for key, value in sensor_data.items():
-                                    if 'input' in key and isinstance(
-                                            value, (int, float)):
-                                        return float(value)
-            except Exception:
-                pass
-
-        # 方法2: 直接读取 hwmon
         try:
-            hwmon_path = '/sys/class/hwmon'
-            if os.path.exists(hwmon_path):
-                for hwmon in os.listdir(hwmon_path):
-                    name_path = os.path.join(hwmon_path, hwmon, 'name')
-                    if os.path.exists(name_path):
-                        with open(name_path) as f:
-                            name = f.read().strip()
-                        keywords = ['coretemp', 'k10temp', 'zenpower']
-                        if any(x in name for x in keywords):
-                            # 尝试多个温度传感器
-                            for i in range(1, 10):
-                                temp_path = os.path.join(
-                                    hwmon_path, hwmon, f'temp{i}_input')
-                                if os.path.exists(temp_path):
-                                    with open(temp_path) as f:
-                                        return float(f.read().strip()) / 1000.0
+            temps = psutil.sensors_temperatures()
+            for name in ['coretemp', 'k10temp', 'zenpower', 'cpu_thermal']:
+                if name in temps:
+                    readings = temps[name]
+                    if readings:
+                        return readings[0].current
         except Exception:
             pass
 
-        # 方法3: thermal_zone
         try:
-            for zone in os.listdir('/sys/class/thermal'):
-                if zone.startswith('thermal_zone'):
-                    temp_path = f'/sys/class/thermal/{zone}/temp'
-                    if os.path.exists(temp_path):
-                        with open(temp_path) as f:
-                            return float(f.read().strip()) / 1000.0
+            with open('/sys/class/thermal/thermal_zone0/temp', 'r') as f:
+                return float(f.read().strip()) / 1000
         except Exception:
             pass
 
         return None
 
     def _get_cpu_power(self) -> float | None:
-        """获取 CPU 功耗 (通过 Intel RAPL)"""
         try:
-            rapl_path = '/sys/class/powercap/intel-rapl:0/energy_uj'
+            rapl_path = '/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj'
             if os.path.exists(rapl_path):
-                # 需要两次读取计算功耗
-                with open(rapl_path) as f:
+                with open(rapl_path, 'r') as f:
                     energy1 = int(f.read().strip())
                 time.sleep(0.1)
-                with open(rapl_path) as f:
+                with open(rapl_path, 'r') as f:
                     energy2 = int(f.read().strip())
-                # 转换为瓦特
-                power_uw = (energy2 - energy1) / 0.1  # 微焦耳/秒 = 微瓦
-                return power_uw / 1000000  # 转换为瓦特
+                return (energy2 - energy1) / 100000  # uJ -> W (over 0.1s)
         except Exception:
             pass
         return None
 
     def get_gpu_list(self) -> list[str]:
-        if self._gpu_names:
-            return self._gpu_names
-        return ["Integrated GPU"]
-
-    def get_gpu_info(self, gpu_index: int = 0) -> dict[str, Any]:
-        gpu_name: str = "Unknown GPU"
-        if gpu_index < len(self._gpu_names):
-            gpu_name = self._gpu_names[gpu_index]
-
-        result: dict[str, Any] = {
-            "name": gpu_name,
-            "util": None, "temp": None, "clock_mhz": None,
-            "mem_used_b": None, "mem_total_b": None, "power": None
-        }
-
         if self._gpu_type == 'nvidia':
             output = self._run_cmd([
-                'nvidia-smi', f'--id={gpu_index}',
-                '--query-gpu=name,utilization.gpu,temperature.gpu,'
-                'clocks.gr,memory.used,memory.total,power.draw',
-                '--format=csv,noheader,nounits'
-            ])
-
+                'nvidia-smi', '--query-gpu=name', '--format=csv,noheader'])
             if output:
-                parts = [p.strip() for p in output.strip().split(',')]
-                if len(parts) >= 7:
-                    try:
-                        result = {
-                            "name": parts[0],
-                            "util": (
-                                float(parts[1])
-                                if parts[1] and parts[1] != '[N/A]'
-                                else None),
-                            "temp": (
-                                float(parts[2])
-                                if parts[2] and parts[2] != '[N/A]'
-                                else None),
-                            "clock_mhz": (
-                                float(parts[3])
-                                if parts[3] and parts[3] != '[N/A]'
-                                else None),
-                            "mem_used_b": (
-                                float(parts[4]) * 1024 * 1024
-                                if parts[4] and parts[4] != '[N/A]'
-                                else None),
-                            "mem_total_b": (
-                                float(parts[5]) * 1024 * 1024
-                                if parts[5] and parts[5] != '[N/A]'
-                                else None),
-                            "power": (
-                                float(parts[6])
-                                if parts[6] and parts[6] != '[N/A]'
-                                else None)
-                        }
-                    except Exception:
-                        pass
+                return [line.strip() for line in output.strip().split('\n')]
+        return ["Unknown GPU"]
 
-        elif self._gpu_type == 'amd':
-            # AMD GPU 监控 - rocm-smi
-            temp_output = self._run_cmd(
-                ['rocm-smi', '-d', str(gpu_index), '--showtemp'])
-            if temp_output:
-                match = re.search(
-                    r'(\d+\.?\d*)\s*c', temp_output, re.IGNORECASE)
-                if match:
-                    result["temp"] = float(match.group(1))
+    def get_gpu_info(self, gpu_index: int = 0) -> dict[str, Any]:
+        if self._gpu_type == 'nvidia':
+            return self._get_nvidia_gpu_info(gpu_index)
+        return {
+            "name": "Unknown GPU",
+            "util": None,
+            "temp": None,
+            "clock_mhz": None,
+            "mem_used_b": None,
+            "mem_total_b": None,
+            "power": None
+        }
 
-            usage_output = self._run_cmd(
-                ['rocm-smi', '-d', str(gpu_index), '--showuse'])
-            if usage_output:
-                match = re.search(r'(\d+)%', usage_output)
-                if match:
-                    result["util"] = float(match.group(1))
+    def _get_nvidia_gpu_info(self, gpu_index: int = 0) -> dict[str, Any]:
+        output = self._run_cmd([
+            'nvidia-smi',
+            f'--id={gpu_index}',
+            '--query-gpu=name,utilization.gpu,temperature.gpu,'
+            'clocks.current.graphics,memory.used,memory.total,power.draw',
+            '--format=csv,noheader,nounits'
+        ])
 
-            # AMD: 通过 amdgpu hwmon 获取更多信息
-            result.update(self._get_amd_gpu_info(gpu_index))
-
-        elif self._gpu_type == 'intel':
-            # Intel GPU 监控
-            result.update(self._get_intel_gpu_info(gpu_index))
-
-        return result
-
-    def _get_amd_gpu_info(self, gpu_index: int) -> dict[str, Any]:
-        """获取 AMD GPU 信息通过 sysfs"""
-        result: dict[str, Any] = {}
-        try:
-            hwmon_path = f'/sys/class/drm/card{gpu_index}/device/hwmon'
-            if os.path.exists(hwmon_path):
-                hwmons = os.listdir(hwmon_path)
-                if hwmons:
-                    hwmon = os.path.join(hwmon_path, hwmons[0])
-
-                    # 温度
-                    temp_path = os.path.join(hwmon, 'temp1_input')
-                    if os.path.exists(temp_path):
-                        with open(temp_path) as f:
-                            result["temp"] = float(f.read().strip()) / 1000.0
-
-                    # 功耗
-                    power_path = os.path.join(hwmon, 'power1_average')
-                    if os.path.exists(power_path):
-                        with open(power_path) as f:
-                            # 微瓦转瓦
-                            result["power"] = (
-                                float(f.read().strip()) / 1000000.0)
-        except Exception:
-            pass
-        return result
-
-    def _get_intel_gpu_info(self, gpu_index: int) -> dict[str, Any]:
-        """获取 Intel GPU 信息"""
-        result: dict[str, Any] = {}
-        # Intel GPU 可以通过 intel_gpu_top 获取使用率
-        # 需要 intel-gpu-tools 包
-        output = self._run_cmd(['intel_gpu_top', '-l', '-s', '100'])
         if output:
-            # 解析 intel_gpu_top 输出
-            pass
-        return result
+            try:
+                parts = [p.strip() for p in output.strip().split(',')]
+                return {
+                    "name": parts[0],
+                    "util": float(parts[1]) if parts[1] else None,
+                    "temp": float(parts[2]) if parts[2] else None,
+                    "clock_mhz": float(parts[3]) if parts[3] else None,
+                    "mem_used_b": int(float(parts[4]) * 1024 * 1024) if parts[4] else None,
+                    "mem_total_b": int(float(parts[5]) * 1024 * 1024) if parts[5] else None,
+                    "power": float(parts[6]) if parts[6] else None
+                }
+            except Exception:
+                pass
+
+        return {
+            "name": "NVIDIA GPU",
+            "util": None,
+            "temp": None,
+            "clock_mhz": None,
+            "mem_used_b": None,
+            "mem_total_b": None,
+            "power": None
+        }
 
     def get_memory_info(self) -> dict[str, Any]:
         mem = psutil.virtual_memory()
+        freq: int | None = None
 
-        # 尝试获取内存频率
-        freq: int | None = self._get_memory_freq()
+        output = self._run_cmd(['dmidecode', '-t', 'memory'])
+        if output:
+            match = re.search(r'Speed:\s*(\d+)\s*MT/s', output)
+            if match:
+                freq = int(match.group(1))
 
         return {
             "used_b": mem.used,
@@ -1170,37 +1182,14 @@ class LinuxHardwareMonitor:
             "freq_mhz": freq
         }
 
-    def _get_memory_freq(self) -> int | None:
-        """获取内存频率"""
-        if hasattr(self, '_cached_mem_freq'):
-            return self._cached_mem_freq
-
-        # 方法1: 通过 dmidecode (需要 sudo)
-        output = self._run_cmd(['dmidecode', '-t', 'memory'])
-        if output:
-            speeds = re.findall(r'Configured.*Speed:\s*(\d+)\s*MT/s', output)
-            if speeds:
-                self._cached_mem_freq: int | None = max(
-                    int(s) for s in speeds)
-                return self._cached_mem_freq
-
-            speeds = re.findall(r'Speed:\s*(\d+)\s*MT/s', output)
-            if speeds:
-                self._cached_mem_freq = max(int(s) for s in speeds)
-                return self._cached_mem_freq
-
-        # 方法2: 通过 /sys/devices
-        # 某些系统可能有频率信息
-
-        self._cached_mem_freq = None
-        return None
-
 
 # =============================================================================
-# 通用磁盘和网络监控 (跨平台)
+# 磁盘和网络监控
 # =============================================================================
 
 class CachedDisks:
+    """带缓存的磁盘信息"""
+
     def __init__(self) -> None:
         self.prev_io: dict[str, dict[str, int]] = {}
         self.prev_time: float | None = None
@@ -1213,10 +1202,8 @@ class CachedDisks:
         if (self.disk_info_cache is None or
                 current_time - self.disk_info_cache_time >
                 self.disk_info_cache_duration):
-
             self.disk_info_cache = self._build_disk_info()
             self.disk_info_cache_time = current_time
-
         return self.disk_info_cache
 
     def _build_disk_info(self) -> list[dict[str, Any]]:
@@ -1229,37 +1216,22 @@ class CachedDisks:
                 for d in w.Win32_DiskDrive():
                     disk_info: dict[str, Any] = {
                         'index': int(d.Index) if d.Index else 0,
-                        'model': (
-                            d.Model or f"PhysicalDrive{d.Index}").strip(),
+                        'model': (d.Model or f"PhysicalDrive{d.Index}").strip(),
                         'size': int(d.Size) if d.Size else 0,
                         'device_id': f"PhysicalDrive{d.Index}"
                     }
-
                     letters: list[str] = []
                     try:
-                        assoc = d.associators(
-                            "Win32_DiskDriveToDiskPartition")
+                        assoc = d.associators("Win32_DiskDriveToDiskPartition")
                         for p in assoc:
-                            for ld in p.associators(
-                                    "Win32_LogicalDiskToPartition"):
+                            for ld in p.associators("Win32_LogicalDiskToPartition"):
                                 if ld.DeviceID:
                                     letters.append(ld.DeviceID)
                     except Exception:
                         pass
-
                     disk_info['letters'] = sorted(set(letters))
                     disks.append(disk_info)
                 return disks
-            except Exception:
-                pass
-
-        # macOS: 获取磁盘信息
-        if IS_MACOS:
-            try:
-                subprocess.run(
-                    ['diskutil', 'list', '-plist'],
-                    capture_output=True, text=True, timeout=10)
-                # 简化处理: 使用 psutil
             except Exception:
                 pass
 
@@ -1268,16 +1240,13 @@ class CachedDisks:
         seen_devices: set[str] = set()
 
         for i, partition in enumerate(partitions):
-            # 跳过特殊文件系统
-            if partition.fstype in (
-                    'squashfs', 'tmpfs', 'devtmpfs', 'overlay'):
+            if partition.fstype in ('squashfs', 'tmpfs', 'devtmpfs', 'overlay'):
                 continue
             if IS_WINDOWS and 'cdrom' in partition.opts:
                 continue
             if IS_LINUX and partition.mountpoint.startswith('/snap'):
                 continue
 
-            # 去重设备
             device_base = partition.device.split('/')[-1].rstrip('0123456789')
             if device_base in seen_devices and not IS_WINDOWS:
                 continue
@@ -1285,17 +1254,11 @@ class CachedDisks:
 
             try:
                 usage = psutil.disk_usage(partition.mountpoint)
-
-                # 获取更友好的名称
                 model: str
                 if IS_LINUX:
-                    model = (
-                        self._get_linux_disk_model(partition.device)
-                        or partition.device)
+                    model = self._get_linux_disk_model(partition.device) or partition.device
                 elif IS_MACOS:
-                    model = (
-                        self._get_macos_disk_model(partition.device)
-                        or partition.device)
+                    model = self._get_macos_disk_model(partition.device) or partition.device
                 else:
                     model = f"Drive {partition.device}"
 
@@ -1316,9 +1279,7 @@ class CachedDisks:
         return disks
 
     def _get_linux_disk_model(self, device: str) -> str | None:
-        """获取 Linux 磁盘型号"""
         try:
-            # 提取设备名 (例如 /dev/sda1 -> sda)
             dev_name = device.split('/')[-1].rstrip('0123456789')
             model_path = f'/sys/block/{dev_name}/device/model'
             if os.path.exists(model_path):
@@ -1329,7 +1290,6 @@ class CachedDisks:
         return None
 
     def _get_macos_disk_model(self, device: str) -> str | None:
-        """获取 macOS 磁盘型号"""
         try:
             result = subprocess.run(
                 ['diskutil', 'info', device],
@@ -1365,8 +1325,7 @@ class CachedDisks:
                 try:
                     mountpoint: str
                     if IS_WINDOWS:
-                        mountpoint = (
-                            letter + '\\' if len(letter) <= 2 else letter)
+                        mountpoint = letter + '\\' if len(letter) <= 2 else letter
                     else:
                         mountpoint = letter
                     usage = psutil.disk_usage(mountpoint)
@@ -1377,16 +1336,12 @@ class CachedDisks:
             read_speed: float | None = None
             write_speed: float | None = None
 
-            if (self.prev_io and self.prev_time and
-                    current_time > self.prev_time):
+            if self.prev_io and self.prev_time and current_time > self.prev_time:
                 dt = current_time - self.prev_time
-
-                # 查找对应的IO设备
                 device_key: str | None = None
                 if IS_WINDOWS:
                     device_key = f"PhysicalDrive{disk['index']}"
                 else:
-                    # Linux/macOS: 从设备路径提取设备名
                     device_str = disk.get('device', disk.get('model', ''))
                     dev_name = device_str.split('/')[-1].rstrip('0123456789')
                     for key in current_io:
@@ -1414,11 +1369,12 @@ class CachedDisks:
 
         self.prev_io = current_io
         self.prev_time = current_time
-
         return disk_data
 
 
 class CachedNetwork:
+    """带缓存的网络信息"""
+
     def __init__(self) -> None:
         self.prev_stats: Any | None = None
         self.prev_time: float | None = None
@@ -1439,11 +1395,9 @@ class CachedNetwork:
             dt = current_time - self.prev_time
             if dt > 0:
                 up_speed = max(0.0, (
-                    current_stats.bytes_sent - self.prev_stats.bytes_sent
-                ) / dt)
+                    current_stats.bytes_sent - self.prev_stats.bytes_sent) / dt)
                 down_speed = max(0.0, (
-                    current_stats.bytes_recv - self.prev_stats.bytes_recv
-                ) / dt)
+                    current_stats.bytes_recv - self.prev_stats.bytes_recv) / dt)
 
         self.prev_stats = current_stats
         self.prev_time = current_time
@@ -1452,7 +1406,7 @@ class CachedNetwork:
 
 
 # =============================================================================
-# 统一的硬件监控器
+# 统一接口
 # =============================================================================
 
 class HardwareMonitor:
@@ -1517,7 +1471,7 @@ class HardwareMonitor:
     def is_lhm_loaded(self) -> bool:
         """检查LHM是否加载 (仅Windows)"""
         if IS_WINDOWS and self.lhm:
-            return self.lhm.ok
+            return self.lhm.available
         return False
 
     def get_platform_name(self) -> str:
@@ -1527,7 +1481,6 @@ class HardwareMonitor:
         elif IS_MACOS:
             return f"macOS {platform.mac_ver()[0]}"
         elif IS_LINUX:
-            # 尝试获取发行版名称
             try:
                 with open('/etc/os-release') as f:
                     for line in f:
@@ -1548,13 +1501,12 @@ class HardwareMonitor:
             cpu_info = self.lhm.get_cpu_info()
 
             # 如果LHM没有使用率，使用psutil
-            if cpu_info["usage"] is None:
+            if cpu_info.get("usage") is None:
                 current_time = time.time()
                 if (self._cpu_percent_cache is None or
                         current_time - self._cpu_percent_cache_time > 1.0):
                     try:
-                        self._cpu_percent_cache = psutil.cpu_percent(
-                            interval=None)
+                        self._cpu_percent_cache = psutil.cpu_percent(interval=None)
                         self._cpu_percent_cache_time = current_time
                     except Exception:
                         pass
@@ -1589,7 +1541,7 @@ class HardwareMonitor:
     @property
     def gpu_names(self) -> list[str]:
         if IS_WINDOWS and self.lhm:
-            return self.lhm.get_gpu_list()
+            return self.lhm.get_gpu_names()
         elif self._platform_monitor:
             return self._platform_monitor.get_gpu_list()
         return ["未检测到GPU"]
@@ -1618,6 +1570,54 @@ class HardwareMonitor:
 # =============================================================================
 # 辅助函数
 # =============================================================================
+
+def convert_memory_to_bytes(
+    value: float | None,
+    data_type: str = "auto"
+) -> float | None:
+    """智能内存单位转换"""
+    if value is None or value < 0:
+        return None
+
+    if value == 0:
+        return 0.0
+
+    if data_type == "gpu_mem":
+        if value < 1 or value < 200:
+            return value * (1024 ** 3)
+        elif value < 200000:
+            return value * (1024 ** 2)
+        else:
+            return value
+
+    elif data_type == "system_mem":
+        if value < 1 or value < 1024:
+            return value * (1024 ** 3)
+        elif value < 1048576:
+            return value * (1024 ** 2)
+        else:
+            return value
+
+    else:
+        if value < 1 or value < 200:
+            return value * (1024 ** 3)
+        elif value < 200000:
+            return value * (1024 ** 2)
+        elif value < 1073741824:
+            return value * 1024
+        else:
+            return value
+
+
+def validate_memory_value(
+    value: float | None,
+    expected_range_gb: tuple[float, float] = (0.1, 256)
+) -> bool:
+    if value is None or value <= 0:
+        return False
+    value_gb = value / (1024 ** 3)
+    return expected_range_gb[0] <= value_gb <= expected_range_gb[1]
+
 
 def bytes2human(n: float | None) -> str:
     if n is None:
@@ -1655,53 +1655,97 @@ def watt_str(v: float | None) -> str:
     return f"{v:.0f} W"
 
 
-# =============================================================================
-# 测试
-# =============================================================================
+# Windows 专用类 (如果在 Windows 上)
+if IS_WINDOWS:
+    class WindowsHardwareMonitor:
+        """Windows 硬件监控实现"""
 
-if __name__ == "__main__":
-    print(f"平台: {SYSTEM}")
-    print(f"Windows: {IS_WINDOWS}, macOS: {IS_MACOS}, Linux: {IS_LINUX}")
-    print()
+        def __init__(self) -> None:
+            self._lhm: OptimizedLHM = OptimizedLHM()
+            self._cpu_name: str | None = None
+            self._init_cpu_name()
 
-    monitor = HardwareMonitor()
-    print(f"平台名称: {monitor.get_platform_name()}")
-    print()
+        def _init_cpu_name(self) -> None:
+            if self._lhm.available:
+                names = self._lhm.get_cpu_names()
+                if names:
+                    self._cpu_name = names[0]
 
-    print("=== CPU ===")
-    cpu = monitor.get_cpu_data()
-    print(f"名称: {cpu['name']}")
-    print(f"使用率: {pct_str(cpu['usage'])}")
-    print(f"温度: {temp_str(cpu['temp'])}")
-    print(f"频率: {mhz_str(cpu['clock_mhz'])}")
-    print(f"功耗: {watt_str(cpu['power'])}")
-    print()
+            if not self._cpu_name:
+                try:
+                    import winreg
+                    key = winreg.OpenKey(
+                        winreg.HKEY_LOCAL_MACHINE,
+                        r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+                    self._cpu_name, _ = winreg.QueryValueEx(
+                        key, "ProcessorNameString")
+                    winreg.CloseKey(key)
+                except Exception:
+                    self._cpu_name = "Unknown CPU"
 
-    print("=== GPU ===")
-    print(f"GPU列表: {monitor.gpu_names}")
-    gpu = monitor.get_gpu_data()
-    print(f"名称: {gpu['name']}")
-    print(f"使用率: {pct_str(gpu['util'])}")
-    print(f"温度: {temp_str(gpu['temp'])}")
-    print(f"显存: {bytes2human(gpu['mem_used_b'])} / "
-          f"{bytes2human(gpu['mem_total_b'])}")
-    print()
+        def get_cpu_info(self) -> dict[str, Any]:
+            usage: float | None = None
+            temp: float | None = None
+            power: float | None = None
+            clock_mhz: float | None = None
 
-    print("=== Memory ===")
-    mem = monitor.get_memory_data()
-    print(f"使用: {bytes2human(mem['used_b'])} / "
-          f"{bytes2human(mem['total_b'])}")
-    print(f"占用: {pct_str(mem['percent'])}")
-    print(f"频率: {mhz_str(mem['freq_mhz'])}")
-    print()
+            if self._lhm.available:
+                usage = self._lhm.get_cpu_load()
+                temp = self._lhm.get_cpu_temp()
+                power = self._lhm.get_cpu_power()
+                clock_mhz = self._lhm.get_cpu_clock()
 
-    print("=== Disk ===")
-    for disk in monitor.get_disk_data():
-        print(f"  {disk['model']}: {bytes2human(disk['used'])} / "
-              f"{bytes2human(disk['size'])}")
-    print()
+            if usage is None:
+                usage = psutil.cpu_percent()
 
-    print("=== Network ===")
-    net = monitor.get_network_data()
-    print(f"上传: {bytes2human(net['up'])}/s")
-    print(f"下载: {bytes2human(net['down'])}/s")
+            if clock_mhz is None:
+                freq = psutil.cpu_freq()
+                clock_mhz = freq.current if freq else None
+
+            return {
+                "name": self._cpu_name,
+                "usage": usage,
+                "temp": temp,
+                "power": power,
+                "clock_mhz": clock_mhz
+            }
+
+        def get_gpu_list(self) -> list[str]:
+            if self._lhm.available:
+                return self._lhm.get_gpu_names()
+            return []
+
+        def get_gpu_info(self, gpu_index: int = 0) -> dict[str, Any]:
+            if self._lhm.available:
+                names = self._lhm.get_gpu_names()
+                name = names[gpu_index] if gpu_index < len(names) else "Unknown"
+                return {
+                    "name": name,
+                    "util": self._lhm.get_gpu_load(gpu_index),
+                    "temp": self._lhm.get_gpu_temp(gpu_index),
+                    "clock_mhz": self._lhm.get_gpu_clock(gpu_index),
+                    "mem_used_b": self._lhm.get_gpu_mem_used(gpu_index),
+                    "mem_total_b": self._lhm.get_gpu_mem_total(gpu_index),
+                    "power": self._lhm.get_gpu_power(gpu_index)
+                }
+            return {
+                "name": "Unknown",
+                "util": None,
+                "temp": None,
+                "clock_mhz": None,
+                "mem_used_b": None,
+                "mem_total_b": None,
+                "power": None
+            }
+
+        def get_memory_info(self) -> dict[str, Any]:
+            mem = psutil.virtual_memory()
+            freq_mhz = None
+            if self._lhm.available:
+                freq_mhz = self._lhm.get_memory_clock()
+            return {
+                "used_b": mem.used,
+                "total_b": mem.total,
+                "percent": mem.percent,
+                "freq_mhz": freq_mhz
+            }

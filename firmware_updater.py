@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 固件更新模块
-使用 sftool.exe 进行固件烧录
+使用 sftool 进行固件烧录（跨平台支持 Windows/macOS/Linux）
 """
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ class FirmwareUpdater:
 
         Args:
             serial_assistant: 串口助手实例
-            sftool_path: sftool.exe 的路径，默认自动查找
+            sftool_path: sftool 的路径，默认自动查找
         """
         self.serial_assistant: SerialAssistant | None = serial_assistant
         self._sftool_path: str | None = sftool_path
@@ -151,7 +151,7 @@ class FirmwareUpdater:
                 pass
 
     def _find_sftool(self) -> str | None:
-        """查找 sftool.exe
+        """查找 sftool 可执行文件
 
         Returns:
             sftool 路径，找不到返回 None
@@ -159,29 +159,100 @@ class FirmwareUpdater:
         if self._sftool_path and os.path.isfile(self._sftool_path):
             return self._sftool_path
 
+        # 根据平台确定可执行文件名
+        system = platform.system()
+        if system == 'Windows':
+            sftool_names = ['sftool.exe']
+        else:  # macOS / Linux
+            sftool_names = ['sftool', 'sftool.bin']
+
         # 可能的搜索路径
         search_paths: list[Path] = []
 
-        # 1. 当前程序目录
+        # 1. 当前程序目录（需要特殊处理 macOS .app 包）
         if getattr(sys, 'frozen', False):
             # PyInstaller 打包后
-            app_dir = Path(sys.executable).parent
+            exe_path = Path(sys.executable)
+            
+            if system == 'Darwin' and '.app' in str(exe_path):
+                # macOS .app 包结构:
+                # SuperKeyHUB.app/
+                #   Contents/
+                #     MacOS/
+                #       SuperKeyHUB  (可执行文件)
+                #     Resources/
+                #       tools/
+                #         sftool     (我们要找的工具)
+                
+                # 方法1: 从 MacOS 目录找到 Resources 目录
+                macos_dir = exe_path.parent  # .app/Contents/MacOS
+                contents_dir = macos_dir.parent  # .app/Contents
+                resources_dir = contents_dir / "Resources"  # .app/Contents/Resources
+                
+                # 优先搜索 Resources/tools 目录
+                for name in sftool_names:
+                    search_paths.append(resources_dir / "tools" / name)
+                    search_paths.append(resources_dir / name)
+                
+                # 也搜索 MacOS 目录（某些打包方式可能放在这里）
+                for name in sftool_names:
+                    search_paths.append(macos_dir / "tools" / name)
+                    search_paths.append(macos_dir / name)
+                
+                # 方法2: 使用 _MEIPASS (PyInstaller 临时目录)
+                if hasattr(sys, '_MEIPASS'):
+                    meipass_dir = Path(sys._MEIPASS)
+                    for name in sftool_names:
+                        search_paths.append(meipass_dir / "tools" / name)
+                        search_paths.append(meipass_dir / name)
+            else:
+                # Windows 或 Linux，或者不在 .app 包内
+                app_dir = exe_path.parent
+                for name in sftool_names:
+                    search_paths.append(app_dir / name)
+                    search_paths.append(app_dir / "tools" / name)
+                    search_paths.append(app_dir / "bin" / name)
+                
+                # PyInstaller _MEIPASS 目录
+                if hasattr(sys, '_MEIPASS'):
+                    meipass_dir = Path(sys._MEIPASS)
+                    for name in sftool_names:
+                        search_paths.append(meipass_dir / "tools" / name)
+                        search_paths.append(meipass_dir / name)
         else:
             # 开发环境
             app_dir = Path(__file__).parent
-
-        search_paths.append(app_dir / "sftool.exe")
-        search_paths.append(app_dir / "tools" / "sftool.exe")
-        search_paths.append(app_dir / "bin" / "sftool.exe")
+            for name in sftool_names:
+                search_paths.append(app_dir / name)
+                search_paths.append(app_dir / "tools" / name)
+                search_paths.append(app_dir / "bin" / name)
 
         # 2. PATH 环境变量
         path_dirs = os.environ.get("PATH", "").split(os.pathsep)
         for path_dir in path_dirs:
-            search_paths.append(Path(path_dir) / "sftool.exe")
+            for name in sftool_names:
+                search_paths.append(Path(path_dir) / name)
+
+        # 3. macOS: Homebrew 常见路径
+        if system == 'Darwin':
+            homebrew_paths = [
+                Path('/opt/homebrew/bin'),
+                Path('/usr/local/bin'),
+            ]
+            for brew_path in homebrew_paths:
+                for name in sftool_names:
+                    search_paths.append(brew_path / name)
 
         # 搜索
         for path in search_paths:
             if path.is_file():
+                # macOS/Linux: 检查是否有执行权限
+                if system != 'Windows' and not os.access(path, os.X_OK):
+                    # 尝试添加执行权限
+                    try:
+                        os.chmod(path, 0o755)
+                    except Exception:
+                        continue
                 self._sftool_path = str(path)
                 return self._sftool_path
 
@@ -279,14 +350,15 @@ class FirmwareUpdater:
         """构建烧录命令
 
         Args:
-            port: COM 端口
+            port: 串口端口 (Windows: COM*, macOS: /dev/cu.*, Linux: /dev/ttyUSB*)
 
         Returns:
             命令参数列表
         """
         sftool_path = self._find_sftool()
         if not sftool_path:
-            raise FileNotFoundError("找不到 sftool.exe")
+            sftool_name = "sftool.exe" if platform.system() == "Windows" else "sftool"
+            raise FileNotFoundError(f"找不到 {sftool_name}")
 
         cmd: list[str] = [
             sftool_path,
@@ -329,9 +401,10 @@ class FirmwareUpdater:
 
             # 检查 sftool
             if not self._find_sftool():
+                sftool_name = "sftool.exe" if platform.system() == "Windows" else "sftool"
                 self._set_status(
                     FirmwareUpdateStatus.FAILED,
-                    "找不到 sftool.exe，请将其放在程序目录下"
+                    f"找不到 {sftool_name}，请将其放在程序目录下"
                 )
                 return False
 

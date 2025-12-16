@@ -4,9 +4,9 @@
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('D:\\program\\SuperKeyHub\\assets', 'assets'), ('D:\\program\\SuperKeyHub\\libs', 'libs')],
-    hiddenimports=['flet', 'flet_core', 'psutil', 'serial', 'serial.tools.list_ports', 'requests', 'PIL', 'pystray', 'clr', 'wmi', 'pythonnet'],
+    binaries=[('/Users/macchuzu/Desktop/SuperKeyHub/tools/sftool', 'tools')],
+    datas=[('/Users/macchuzu/Desktop/SuperKeyHub/assets', 'assets'), ('/Users/macchuzu/Desktop/SuperKeyHub/libs', 'libs'), ('/Users/macchuzu/Desktop/SuperKeyHub/tools', 'tools')],
+    hiddenimports=['flet', 'flet_core', 'psutil', 'serial', 'serial.tools.list_ports', 'requests', 'PIL', 'pystray'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -32,7 +32,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['D:\\program\\SuperKeyHub\\assets\\app.ico'],
 )
 coll = COLLECT(
     exe,
@@ -42,4 +41,10 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='SuperKeyHUB',
+)
+app = BUNDLE(
+    coll,
+    name='SuperKeyHUB.app',
+    icon=None,
+    bundle_identifier=None,
 )

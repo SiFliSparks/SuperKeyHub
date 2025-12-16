@@ -10,7 +10,8 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
-
+import platform
+import threading
 import flet as ft
 
 from config_manager import get_config_manager
@@ -445,11 +446,11 @@ async def main(page: ft.Page) -> None:
         page.window.title_bar_hidden = False
         page.window.title_bar_buttons_hidden = False
         page.window.frameless = False
-        page.bgcolor = ft.colors.TRANSPARENT
+        page.bgcolor = ft.Colors.TRANSPARENT
     else:
         page.window.title_bar_hidden = False
         page.window.frameless = False
-        page.bgcolor = ft.colors.TRANSPARENT
+        page.bgcolor = ft.Colors.TRANSPARENT
 
     # 固定窗口大小
     page.window.resizable = False      # 禁止调整大小
@@ -778,24 +779,28 @@ async def main(page: ft.Page) -> None:
     gpu_power: ft.Text = ft.Text(
         "功耗: —", size=12, weight=ft.FontWeight.BOLD,
         color=theme.get("TEXT_TERTIARY"))
+    # macOS Apple Silicon 使用统一内存，不显示显存
+    gpu_card_content: list[ft.Control] = [
+        ft.Row([
+            ft.Icon(
+                name="developer_board",
+                color=theme.get("TEXT_SECONDARY")),
+            ft.Text(
+                "GPU",
+                size=18,
+                weight=ft.FontWeight.BOLD,
+                color=theme.get("TEXT_PRIMARY")),
+            ft.Container(expand=True),
+            gpu_dd
+        ], spacing=8),
+        gpu_bar, gpu_usage,
+        ft.Row([gpu_temp, gpu_clock, gpu_power], spacing=16),
+    ]
+    # Windows/Linux 显示显存，macOS 不显示（统一内存）
+    if not IS_MACOS:
+        gpu_card_content.append(gpu_mem)
     gpu_card: ft.Card = ft.Card(ft.Container(
-        content=ft.Column([
-            ft.Row([
-                ft.Icon(
-                    name="developer_board",
-                    color=theme.get("TEXT_SECONDARY")),
-                ft.Text(
-                    "GPU",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY")),
-                ft.Container(expand=True),
-                gpu_dd
-            ], spacing=8),
-            gpu_bar, gpu_usage,
-            ft.Row([gpu_temp, gpu_clock, gpu_power], spacing=16),
-            gpu_mem
-        ], spacing=8, expand=True),
+        content=ft.Column(gpu_card_content, spacing=8, expand=True),
         height=CARD_H_ROW1,
         padding=12,
         bgcolor=theme.get("CARD_BG_ALPHA"),
@@ -1767,13 +1772,62 @@ async def main(page: ft.Page) -> None:
     page.overlay.append(firmware_file_picker)
 
     def on_select_firmware_click(e: ft.ControlEvent) -> None:
-        """选择固件文件按钮点击"""
-        firmware_file_picker.pick_files(
-            dialog_title="选择固件更新包",
-            file_type=ft.FilePickerFileType.CUSTOM,
-            allowed_extensions=["zip"],
-            allow_multiple=False
-        )
+            """选择固件文件按钮点击"""
+            if IS_MACOS:
+                # macOS: 使用 osascript 原生文件对话框
+                def pick_with_osascript() -> None:
+                    try:
+                        import subprocess
+                        script = '''
+                        tell application "System Events"
+                            activate
+                            set theFile to choose file with prompt "选择固件更新包" of type {"zip"}
+                            return POSIX path of theFile
+                        end tell
+                        '''
+                        result = subprocess.run(
+                            ['osascript', '-e', script],
+                            capture_output=True,
+                            text=True
+                        )
+                        file_path = result.stdout.strip()
+                        print(f"选择的文件路径: {file_path}")
+                        print(f"返回码: {result.returncode}")
+                        print(f"stderr: {result.stderr}")
+                        
+                        if file_path and result.returncode == 0:
+                            class MockFile:
+                                def __init__(self, path: str):
+                                    self.path = path
+                                    self.name = path.split('/')[-1]
+                            
+                            class MockEvent:
+                                def __init__(self, path: str):
+                                    self.files = [MockFile(path)] if path else None
+                                    self.path = path
+                            
+                            mock_event = MockEvent(file_path)
+                            print(f"MockEvent files: {mock_event.files}")
+                            print(f"MockEvent files[0].path: {mock_event.files[0].path if mock_event.files else None}")
+                            
+                            # 直接调用，不用 run_task
+                            on_firmware_file_picked(mock_event)
+                            page.update()
+                            
+                    except Exception as ex:
+                        print(f"文件选择错误: {ex}")
+                        import traceback
+                        traceback.print_exc()
+                
+                threading.Thread(target=pick_with_osascript, daemon=True).start()
+            else:
+                # Windows/Linux: 使用 Flet FilePicker
+                firmware_file_picker.pick_files(
+                    dialog_title="选择固件更新包",
+                    file_type=ft.FilePickerFileType.CUSTOM,
+                    allowed_extensions=["zip"],
+                    allow_multiple=False
+                )
 
     def on_start_update_click(e: ft.ControlEvent) -> None:
         """开始更新按钮点击"""
@@ -2960,15 +3014,17 @@ async def main(page: ft.Page) -> None:
                 gpu_temp.value = f"温度: {temp_str(g.get('temp'))}"
                 gpu_temp.color = color_by_temp(g.get("temp"), theme)
                 gpu_clock.value = f"频率: {mhz_str(g.get('clock_mhz'))}"
-                mem_total: int | None = g.get("mem_total_b")
-                mem_used_val: int | None = g.get("mem_used_b")
-                if mem_total is not None and mem_used_val is not None:
-                    gpu_mem.value = (
-                        f"显存: {bytes2human(mem_used_val)} / "
-                        f"{bytes2human(mem_total)}"
-                    )
-                else:
-                    gpu_mem.value = "显存: —"
+                # macOS 使用统一内存，不显示显存
+                if not IS_MACOS:
+                    mem_total: int | None = g.get("mem_total_b")
+                    mem_used_val: int | None = g.get("mem_used_b")
+                    if mem_total is not None and mem_used_val is not None:
+                        gpu_mem.value = (
+                            f"显存: {bytes2human(mem_used_val)} / "
+                            f"{bytes2human(mem_total)}"
+                        )
+                    else:
+                        gpu_mem.value = "显存: —"
                 gpu_power.value = f"功耗: {watt_str(g.get('power'))}"
 
                 m: dict[str, Any] = hw_monitor.get_memory_data()
@@ -3030,7 +3086,6 @@ def get_assets_dir() -> str:
 
 ft.app(
     target=main,
-    view=ft.AppView.FLET_APP_HIDDEN,
     assets_dir=get_assets_dir(),  # 使用动态路径
     use_color_emoji=True,
 )

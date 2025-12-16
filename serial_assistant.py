@@ -184,12 +184,19 @@ class SerialAssistant:
             if self.config['port'] not in current_ports:
                 return False
 
-            # 尝试读取CTS状态（这是一个轻量级的检查方式）
-            # 如果端口已断开，这通常会抛出异常
-            try:
-                _ = self.serial_port.cts
-            except (serial.SerialException, OSError):
-                return False
+            # 平台特定的健康检查
+            import platform
+            if platform.system() == 'Darwin':  # macOS
+                # macOS: 很多 USB-CDC 设备不支持硬件流控信号
+                # 仅依赖端口存在性检查，避免 CTS 检查失败导致误判
+                return True
+            else:
+                # Windows/Linux: 尝试读取CTS状态（轻量级检查）
+                # 如果端口已断开，这通常会抛出异常
+                try:
+                    _ = self.serial_port.cts
+                except (serial.SerialException, OSError):
+                    return False
 
             return True
 
