@@ -150,8 +150,8 @@ jobs:
           # 检查 wmi
           uv run python -c "import wmi; print('wmi: OK')"
           
-          # 检查 flet
-          uv run python -c "import flet; print(f'flet: {flet.__version__}')"
+          # 检查 flet (使用 importlib.metadata 获取版本)
+          uv run python -c "import flet; from importlib.metadata import version; print(f'flet: {version(\"flet\")}')"
           
           Write-Host "[OK] All critical dependencies available"
 
