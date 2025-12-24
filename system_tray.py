@@ -198,10 +198,24 @@ class SystemTray:
 
 
 class AutoStartManager:
-    """跨平台开机自启动管理器"""
+    """跨平台开机自启动管理器
+    
+    Windows: 使用注册表 (HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run)
+    macOS: 使用 LaunchAgents
+    Linux: 使用 XDG autostart
+    """
 
     APP_NAME: str = "SuperKeyHUB"
+    
+    # Windows 注册表路径
+    REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    
+    # 旧版任务计划程序任务名（用于清理）
+    LEGACY_TASK_NAME: str = "SuperKeyHUB_AutoStart"
+
+    # =========================================================================
     # 公共接口
+    # =========================================================================
 
     @classmethod
     def is_supported(cls) -> bool:
@@ -249,57 +263,78 @@ class AutoStartManager:
         else:
             return cls.disable()
 
-    # Windows 实现 (任务计划程序 - 支持管理员权限自启动)
+    @classmethod
+    def cleanup_all(cls) -> bool:
+        """清理所有自启动项（用于卸载时调用）
+        
+        会清理：
+        - Windows: 注册表项 + 旧版任务计划程序任务
+        - macOS: LaunchAgent plist
+        - Linux: XDG autostart desktop 文件
+        """
+        if IS_WINDOWS:
+            return cls._windows_cleanup_all()
+        elif IS_MACOS:
+            return cls._macos_disable()
+        elif IS_LINUX:
+            return cls._linux_disable()
+        return False
 
-    TASK_NAME: str = "SuperKeyHUB_AutoStart"
-    # 用于清理旧版
-    REG_PATH: str = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    # =========================================================================
+    # Windows 实现 (注册表方式)
+    # =========================================================================
 
     @classmethod
-    def _windows_cleanup_old_registry(cls) -> None:
-        """清理旧版本使用的注册表自启动项"""
+    def _windows_cleanup_legacy_task(cls) -> None:
+        """清理旧版任务计划程序任务"""
         if not IS_WINDOWS:
             return
         try:
-            import winreg as _winreg  # type: ignore[import]
-            winreg: Any = _winreg
-            key: Any = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                cls.REG_PATH,
-                0,
-                winreg.KEY_SET_VALUE
+            import subprocess
+            subprocess.run(
+                ['schtasks', '/Delete', '/TN', cls.LEGACY_TASK_NAME, '/F'],
+                capture_output=True,
+                creationflags=0x08000000  # CREATE_NO_WINDOW
             )
-            try:
-                winreg.DeleteValue(key, cls.APP_NAME)
-            except FileNotFoundError:
-                pass
-            winreg.CloseKey(key)
         except Exception:
             pass
 
     @classmethod
     def _windows_is_enabled(cls) -> bool:
-        """检查任务计划程序中是否存在自启动任务"""
+        """检查注册表中是否存在自启动项"""
+        if not IS_WINDOWS:
+            return False
         try:
-            import subprocess
-            result: subprocess.CompletedProcess[str] = subprocess.run(
-                ['schtasks', '/Query', '/TN', cls.TASK_NAME],
-                capture_output=True, text=True,
-                creationflags=0x08000000  # CREATE_NO_WINDOW
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                cls.REG_PATH,
+                0,
+                winreg.KEY_READ
             )
-            return result.returncode == 0
+            try:
+                winreg.QueryValueEx(key, cls.APP_NAME)
+                winreg.CloseKey(key)
+                return True
+            except FileNotFoundError:
+                winreg.CloseKey(key)
+                return False
         except Exception:
             return False
 
     @classmethod
     def _windows_enable(cls, exe_path: str | None = None) -> bool:
-        """使用任务计划程序创建管理员权限自启动任务"""
-        # 先清理旧版注册表项
-        cls._windows_cleanup_old_registry()
+        """使用注册表创建自启动项"""
+        if not IS_WINDOWS:
+            return False
+            
+        # 先清理旧版任务计划程序任务
+        cls._windows_cleanup_legacy_task()
 
-        script_path: str = ""
+        # 构建启动命令
         if exe_path is None:
             if getattr(sys, 'frozen', False):
+                # 打包后的 exe
                 exe_path = sys.executable
             else:
                 # 开发模式：使用 pythonw 避免控制台窗口
@@ -309,60 +344,67 @@ class AutoStartManager:
                 if not os.path.exists(python_exe):
                     python_exe = sys.executable
                 exe_path = python_exe
-                script_path = os.path.abspath(sys.argv[0])
+
+        # 构建完整命令（带 --minimized 参数）
+        if getattr(sys, 'frozen', False):
+            command: str = f'"{exe_path}" --minimized'
+        else:
+            script_path: str = os.path.abspath(sys.argv[0])
+            command = f'"{exe_path}" "{script_path}" --minimized'
 
         try:
-            import getpass  # noqa: F401
-            import subprocess
-
-            # 先删除可能存在的旧任务
-            subprocess.run(
-                ['schtasks', '/Delete', '/TN', cls.TASK_NAME, '/F'],
-                capture_output=True, creationflags=0x08000000
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                cls.REG_PATH,
+                0,
+                winreg.KEY_SET_VALUE
             )
-
-            # 构建命令
-            command: str
-            if getattr(sys, 'frozen', False):
-                # 打包后的 exe
-                command = f'"{exe_path}" --minimized'
-            else:
-                # 开发模式
-                command = f'"{exe_path}" "{script_path}" --minimized'
-
-            # 创建任务计划程序任务
-            # /SC ONLOGON - 用户登录时运行
-            # /RL HIGHEST - 使用最高权限运行（管理员）
-            # /DELAY 0000:5 - 延迟5秒启动（等待系统完全加载）
-            result: subprocess.CompletedProcess[str] = subprocess.run([
-                'schtasks', '/Create',
-                '/TN', cls.TASK_NAME,
-                '/TR', command,
-                '/SC', 'ONLOGON',
-                '/RL', 'HIGHEST',
-                '/DELAY', '0000:5',
-                '/F'  # 强制覆盖
-            ], capture_output=True, text=True, creationflags=0x08000000)
-
-            return result.returncode == 0
+            winreg.SetValueEx(key, cls.APP_NAME, 0, winreg.REG_SZ, command)
+            winreg.CloseKey(key)
+            return True
         except Exception:
             return False
 
     @classmethod
     def _windows_disable(cls) -> bool:
-        """删除任务计划程序中的自启动任务"""
-        # 同时清理旧版注册表项
-        cls._windows_cleanup_old_registry()
+        """删除注册表中的自启动项"""
+        if not IS_WINDOWS:
+            return False
+            
+        # 同时清理旧版任务计划程序任务
+        cls._windows_cleanup_legacy_task()
 
         try:
-            import subprocess
-            subprocess.run(
-                ['schtasks', '/Delete', '/TN', cls.TASK_NAME, '/F'],
-                capture_output=True, creationflags=0x08000000
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                cls.REG_PATH,
+                0,
+                winreg.KEY_SET_VALUE
             )
-            return True  # 即使任务不存在也返回成功
+            try:
+                winreg.DeleteValue(key, cls.APP_NAME)
+            except FileNotFoundError:
+                pass  # 不存在也视为成功
+            winreg.CloseKey(key)
+            return True
         except Exception:
             return False
+
+    @classmethod
+    def _windows_cleanup_all(cls) -> bool:
+        """清理所有 Windows 自启动项（注册表 + 旧版任务计划程序）"""
+        if not IS_WINDOWS:
+            return False
+        
+        # 清理注册表
+        registry_ok: bool = cls._windows_disable()
+        
+        # 清理旧版任务计划程序任务
+        cls._windows_cleanup_legacy_task()
+        
+        return registry_ok
 
     # =========================================================================
     # macOS 实现 (LaunchAgents)
@@ -456,7 +498,10 @@ class AutoStartManager:
         except Exception:
             return False
 
+    # =========================================================================
     # Linux 实现 (XDG autostart)
+    # =========================================================================
+
     @classmethod
     def _linux_desktop_path(cls) -> Path:
         """获取 XDG autostart desktop 文件路径"""
@@ -538,5 +583,6 @@ if __name__ == "__main__":
     print(f"自启动支持: {AutoStartManager.is_supported()}")
     print(f"自启动已启用: {AutoStartManager.is_enabled()}")
     if IS_WINDOWS:
-        print("自启动方式: 任务计划程序 (管理员权限)")
-        print(f"任务名称: {AutoStartManager.TASK_NAME}")
+        print("自启动方式: 注册表")
+        print(f"注册表路径: HKCU\\{AutoStartManager.REG_PATH}")
+        print(f"注册表键名: {AutoStartManager.APP_NAME}")

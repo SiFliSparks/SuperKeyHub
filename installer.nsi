@@ -18,6 +18,11 @@
 !define DIST_DIR "dist"
 !define ASSETS_DIR "assets"
 
+; 自启动注册表路径
+!define AUTOSTART_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
+; 旧版任务计划程序任务名（用于清理）
+!define LEGACY_TASK_NAME "${APP_NAME}_AutoStart"
+
 ; ============================================================================
 ; Installer Properties
 ; ============================================================================
@@ -119,7 +124,8 @@ Section "Desktop Shortcut" SecDesktop
 SectionEnd
 
 Section /o "Auto Start" SecAutoStart
-    nsExec::ExecToLog 'schtasks /Create /TN "${APP_NAME}_AutoStart" /TR "\"$INSTDIR\${APP_EXE}\" --minimized" /SC ONLOGON /RL HIGHEST /DELAY 0000:5 /F'
+    ; 使用注册表方式设置自启动（HKCU，不需要管理员权限）
+    WriteRegStr HKCU "${AUTOSTART_REG_KEY}" "${APP_NAME}" '"$INSTDIR\${APP_EXE}" --minimized'
 SectionEnd
 
 ; ============================================================================
@@ -129,24 +135,35 @@ SectionEnd
     !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} "Install ${APP_NAME} main program files"
     !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "Create Start Menu shortcuts"
     !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "Create Desktop shortcut"
-    !insertmacro MUI_DESCRIPTION_TEXT ${SecAutoStart} "Set to auto start on login (requires admin privileges)"
+    !insertmacro MUI_DESCRIPTION_TEXT ${SecAutoStart} "Set to auto start on login"
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 ; ============================================================================
 ; Uninstall Section
 ; ============================================================================
 Section "Uninstall"
+    ; 结束正在运行的程序
     nsExec::ExecToLog 'taskkill /F /IM "${APP_EXE}"'
     
-    nsExec::ExecToLog 'schtasks /Delete /TN "${APP_NAME}_AutoStart" /F'
+    ; 清理自启动项 - 注册表方式（当前使用）
+    DeleteRegValue HKCU "${AUTOSTART_REG_KEY}" "${APP_NAME}"
     
+    ; 清理旧版自启动项 - 任务计划程序方式（兼容旧版本）
+    nsExec::ExecToLog 'schtasks /Delete /TN "${LEGACY_TASK_NAME}" /F'
+    
+    ; 删除程序文件
     RMDir /r "$INSTDIR"
     
+    ; 删除快捷方式
     Delete "$DESKTOP\${APP_NAME}.lnk"
     RMDir /r "$SMPROGRAMS\${APP_NAME}"
     
+    ; 删除注册表项
     DeleteRegKey HKLM "Software\${APP_NAME}"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
+    
+    ; 删除用户配置目录（可选，如果需要保留用户配置可注释掉）
+    RMDir /r "$APPDATA\SuperKey"
 SectionEnd
 
 ; ============================================================================
