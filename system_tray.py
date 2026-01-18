@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
 系统托盘模块
-修复 macOS 上 NSApplication 必须在主线程运行的问题
-
-解决方案：在 macOS 上禁用 pystray 托盘功能，因为 pystray 使用 PyObjC
-调用 NSApplication.run()，这必须在主线程执行，与 Flet 的事件循环冲突。
 """
 from __future__ import annotations
 

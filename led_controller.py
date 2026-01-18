@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 LED灯光效果控制器模块
-通过串口发送命令控制RGB LED效果
 """
 
 from __future__ import annotations

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Finsh数据发送模块
-支持天气数据延迟发送
 """
 
 import threading

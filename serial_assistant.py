@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-串口数据处理 - 修复版
-关键修复: USB CDC设备需要DTR=True才能正常通信
+串口数据处理
 """
 import queue
 import threading

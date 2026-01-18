@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 固件更新模块
-使用 sftool 进行固件烧录（跨平台支持 Windows/macOS/Linux）
 """
 from __future__ import annotations
 

@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
-硬件监控模块 - 跨平台支持 Windows/macOS/Linux
-v2.2 - Apple Silicon IOKit/IOReport 增强版
-
-对于 Apple Silicon Mac，推荐安装 macmon 以获得最佳体验:
-  brew install macmon
+硬件监控模块
 """
 
 import contextlib
