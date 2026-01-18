@@ -18,9 +18,9 @@
 !define DIST_DIR "dist"
 !define ASSETS_DIR "assets"
 
-; 自启动注册表路径
+; Auto-start registry path
 !define AUTOSTART_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Run"
-; 旧版任务计划程序任务名（用于清理）
+; Legacy task scheduler task name (for cleanup)
 !define LEGACY_TASK_NAME "${APP_NAME}_AutoStart"
 
 ; ============================================================================
@@ -124,7 +124,7 @@ Section "Desktop Shortcut" SecDesktop
 SectionEnd
 
 Section /o "Auto Start" SecAutoStart
-    ; 使用注册表方式设置自启动（HKCU，不需要管理员权限）
+    ; Use registry for auto-start (HKCU, no admin required)
     WriteRegStr HKCU "${AUTOSTART_REG_KEY}" "${APP_NAME}" '"$INSTDIR\${APP_EXE}" --minimized'
 SectionEnd
 
@@ -142,27 +142,27 @@ SectionEnd
 ; Uninstall Section
 ; ============================================================================
 Section "Uninstall"
-    ; 结束正在运行的程序
+    ; Kill running process
     nsExec::ExecToLog 'taskkill /F /IM "${APP_EXE}"'
     
-    ; 清理自启动项 - 注册表方式（当前使用）
+    ; Clean auto-start - registry method (current)
     DeleteRegValue HKCU "${AUTOSTART_REG_KEY}" "${APP_NAME}"
     
-    ; 清理旧版自启动项 - 任务计划程序方式（兼容旧版本）
+    ; Clean legacy auto-start - task scheduler method (for old versions)
     nsExec::ExecToLog 'schtasks /Delete /TN "${LEGACY_TASK_NAME}" /F'
     
-    ; 删除程序文件
+    ; Delete program files
     RMDir /r "$INSTDIR"
     
-    ; 删除快捷方式
+    ; Delete shortcuts
     Delete "$DESKTOP\${APP_NAME}.lnk"
     RMDir /r "$SMPROGRAMS\${APP_NAME}"
     
-    ; 删除注册表项
+    ; Delete registry keys
     DeleteRegKey HKLM "Software\${APP_NAME}"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
     
-    ; 删除用户配置目录（可选，如果需要保留用户配置可注释掉）
+    ; Delete user config directory (optional, comment out to keep user config)
     RMDir /r "$APPDATA\SuperKey"
 SectionEnd
 

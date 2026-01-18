@@ -7,6 +7,7 @@ v2.2 - Apple Silicon IOKit/IOReport 增强版
   brew install macmon
 """
 
+import contextlib
 import ctypes
 from ctypes import POINTER, byref, c_char_p, c_double, c_int64, c_uint32, c_uint64, c_void_p
 import json
@@ -616,16 +617,15 @@ class AppleSiliconMonitor:
 
     def stop(self) -> None:
         """停止后台采样"""
+        import contextlib
         self._running = False
         if self._process:
             try:
                 self._process.terminate()
                 self._process.wait(timeout=2)
             except Exception:
-                try:
+                with contextlib.suppress(Exception):
                     self._process.kill()
-                except Exception:
-                    pass
         if self._thread:
             self._thread.join(timeout=2)
 
@@ -807,9 +807,8 @@ class AppleSiliconMonitor:
             cpu_temps = []
             for name, temp in temps.items():
                 name_lower = name.lower()
-                if any(k in name_lower for k in ['cpu', 'soc', 'die', 'pmu']):
-                    if 'gpu' not in name_lower:
-                        cpu_temps.append(temp)
+                if any(k in name_lower for k in ["cpu", "soc", "die", "pmu"]) and "gpu" not in name_lower:
+                    cpu_temps.append(temp)
             if cpu_temps:
                 return sum(cpu_temps) / len(cpu_temps)
         return None
@@ -1510,10 +1509,8 @@ class HardwareMonitor:
                 self._platform_monitor = LinuxHardwareMonitor()
 
             # 初始化 psutil CPU 百分比（首次调用返回0）
-            try:
+            with contextlib.suppress(Exception):
                 psutil.cpu_percent(interval=None)
-            except Exception:
-                pass
 
             self._initialized = True
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import platform
 import sys
@@ -10,7 +11,6 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypedDict
-import platform
 import threading
 import flet as ft
 
@@ -326,6 +326,58 @@ def get_icon_path() -> str | None:
     return None
 
 
+def set_windows_taskbar_icon(icon_path: str) -> None:
+    """设置Windows任务栏图标（解决Flet默认图标问题）"""
+    if not IS_WINDOWS or not icon_path:
+        return
+    
+    try:
+        import ctypes
+        from ctypes import wintypes
+        
+        # Windows API 常量
+        GCL_HICON = -14
+        GCL_HICONSM = -34
+        ICON_SMALL = 0
+        ICON_BIG = 1
+        WM_SETICON = 0x0080
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x0010
+        LR_DEFAULTSIZE = 0x0040
+        
+        # 加载图标
+        user32 = ctypes.windll.user32
+        hicon = user32.LoadImageW(
+            None,
+            icon_path,
+            IMAGE_ICON,
+            0, 0,
+            LR_LOADFROMFILE | LR_DEFAULTSIZE
+        )
+        
+        if not hicon:
+            return
+        
+        # 查找窗口 - Flet 窗口标题
+        def enum_windows_callback(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd) + 1
+            buf = ctypes.create_unicode_buffer(length)
+            user32.GetWindowTextW(hwnd, buf, length)
+            if "Build v" in buf.value or APP_NAME in buf.value:
+                # 设置大图标和小图标
+                user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon)
+                user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon)
+            return True
+        
+        WNDENUMPROC = ctypes.WINFUNCTYPE(
+            wintypes.BOOL, wintypes.HWND, wintypes.LPARAM
+        )
+        user32.EnumWindows(WNDENUMPROC(enum_windows_callback), 0)
+        
+    except Exception:
+        pass  # 静默失败，不影响程序运行
+
+
 # 导航项组件
 class NavigationItem:
     def __init__(
@@ -362,6 +414,8 @@ class NavigationItem:
                 style=ft.ButtonStyle(
                     padding=ft.padding.all(8),
                     alignment=ft.alignment.center,
+                    # 禁用 IconButton 自身的悬浮效果，避免与外层 Container 的 ink 效果叠加
+                    overlay_color=ft.Colors.TRANSPARENT,
                 ),
                 on_click=lambda e: (
                     self.on_click_handler(view_name)
@@ -513,6 +567,15 @@ async def main(page: ft.Page) -> None:
     page.add(splash_screen)
     page.update()
 
+    # Windows: 设置任务栏图标（需要延迟执行，等待窗口创建完成）
+    if IS_WINDOWS and icon_path:
+        def delayed_set_icon() -> None:
+            import time as time_module
+            time_module.sleep(0.5)  # 等待窗口创建
+            set_windows_taskbar_icon(icon_path)
+        
+        threading.Thread(target=delayed_set_icon, daemon=True).start()
+
     # ==================== 后台初始化 ====================
     hw_monitor: HardwareMonitor = HardwareMonitor(lazy_init=True)
     hw_init_done: dict[str, bool] = {"ready": False}
@@ -522,8 +585,6 @@ async def main(page: ft.Page) -> None:
         hw_monitor._do_init()
         hw_init_done["ready"] = True
 
-    # 启动后台初始化线程
-    import threading
     hw_init_thread = threading.Thread(
         target=init_hw_monitor_background, daemon=True)
     hw_init_thread.start()
@@ -551,30 +612,52 @@ async def main(page: ft.Page) -> None:
 
     def show_window() -> None:
         """显示窗口"""
+        import contextlib
         page.window.visible = True
         page.window.focused = True
-        try:
+        with contextlib.suppress(BaseException):
             page.update()
-        except BaseException:
-            pass
 
     def cleanup_and_exit() -> None:
-        """清理资源"""
-        try:
-            if finsh_sender.enabled:
-                finsh_sender.stop()
-            if serial_assistant.is_connected:
-                serial_assistant.disconnect()
-        except BaseException:
-            pass
-        if system_tray:
-            system_tray.stop()
+        """清理资源（快速版本）"""
+        import contextlib
+        # 设置停止标志，让线程自行退出
+        with contextlib.suppress(BaseException):
+            finsh_sender.enabled = False
+            finsh_sender.stop_event.set()
+        with contextlib.suppress(BaseException):
+            serial_assistant.stop_threads.set()
 
     def quit_app() -> None:
         """完全退出应用"""
+        import contextlib
+        import os
         app_state["force_quit"] = True
         cleanup_and_exit()
-        page.window.destroy()
+        
+        # 停止托盘（不等待）
+        if system_tray:
+            with contextlib.suppress(BaseException):
+                if system_tray._icon:
+                    system_tray._icon.stop()
+        
+        # 关闭Flet窗口
+        with contextlib.suppress(BaseException):
+            page.window.destroy()
+        
+        # 强制终止当前进程及所有子进程
+        try:
+            import psutil
+            current_process = psutil.Process(os.getpid())
+            children = current_process.children(recursive=True)
+            for child in children:
+                with contextlib.suppress(BaseException):
+                    child.kill()
+        except Exception:
+            pass
+        
+        # 最后强制退出
+        os._exit(0)
 
     def on_window_event(e: ft.ControlEvent) -> None:
         """处理窗口事件"""
@@ -668,6 +751,16 @@ async def main(page: ft.Page) -> None:
         width=180,
         fit=ft.ImageFit.CONTAIN)
 
+    # 设备连接状态指示器
+    device_status_indicator: ft.Container = ft.Container(
+        content=ft.Row([
+            ft.Icon(name="circle", size=8, color=theme.get("GOOD")),
+            ft.Text("设备已连接", size=12, color=theme.get("GOOD")),
+        ], spacing=4),
+        visible=False,  # 初始隐藏
+        padding=ft.padding.only(left=12),
+    )
+
     title_row: ft.Container = ft.Container(
         content=ft.Row([
             ft.Container(width=12),
@@ -677,6 +770,7 @@ async def main(page: ft.Page) -> None:
                     f"{APP_NAME} v{APP_VERSION}",
                     color=theme.get("TEXT_SECONDARY"),
                     size=14),
+                device_status_indicator,
             ], spacing=10),
             ft.Container(expand=True),
             title_buttons
@@ -730,18 +824,17 @@ async def main(page: ft.Page) -> None:
     cpu_power: ft.Text = ft.Text(
         "功耗: —", size=12, weight=ft.FontWeight.BOLD,
         color=theme.get("TEXT_TERTIARY"))
+    cpu_icon: ft.Icon = ft.Icon(
+        name="devices_other",
+        color=theme.get("TEXT_SECONDARY"))
+    cpu_label: ft.Text = ft.Text(
+        "CPU",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     cpu_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(
-                    name="devices_other",
-                    color=theme.get("TEXT_SECONDARY")),
-                ft.Text(
-                    "CPU",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
+            ft.Row([cpu_icon, cpu_label], spacing=8),
             cpu_title, cpu_bar, cpu_usage,
             ft.Row([cpu_temp, cpu_clock, cpu_power], spacing=16)
         ], spacing=8, expand=True),
@@ -753,17 +846,32 @@ async def main(page: ft.Page) -> None:
 
     # 使用占位符，待初始化完成后更新
     gpu_names: list[str] = ["正在检测..."]
+
+    def on_gpu_selected(e: ft.ControlEvent) -> None:
+        """GPU选择变更事件处理"""
+        try:
+            new_index = int(e.control.value or 0)
+            finsh_sender.set_gpu_index(new_index)
+            config_mgr.set_gpu_index(new_index)  # 保存到配置
+        except (ValueError, TypeError):
+            pass
+
+    # 从配置中读取上次选择的GPU索引
+    saved_gpu_index: int = config_mgr.get_gpu_index()
+    finsh_sender.set_gpu_index(saved_gpu_index)  # 初始化时设置
+
     gpu_dd: ft.Dropdown = ft.Dropdown(
         options=[
             ft.dropdown.Option(
                 str(i),
                 text=name) for i,
             name in enumerate(gpu_names)],
-        value="0",
+        value=str(saved_gpu_index),  # 使用保存的索引
         width=300,
         dense=True,
         border_width=0,
-        text_style=ft.TextStyle(weight=ft.FontWeight.BOLD))
+        text_style=ft.TextStyle(weight=ft.FontWeight.BOLD),
+        on_change=on_gpu_selected)
     gpu_bar: ft.ProgressBar = ft.ProgressBar(
         value=0,
         height=8,
@@ -785,16 +893,18 @@ async def main(page: ft.Page) -> None:
         "功耗: —", size=12, weight=ft.FontWeight.BOLD,
         color=theme.get("TEXT_TERTIARY"))
     # macOS Apple Silicon 使用统一内存，不显示显存
+    gpu_icon: ft.Icon = ft.Icon(
+        name="developer_board",
+        color=theme.get("TEXT_SECONDARY"))
+    gpu_label: ft.Text = ft.Text(
+        "GPU",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     gpu_card_content: list[ft.Control] = [
         ft.Row([
-            ft.Icon(
-                name="developer_board",
-                color=theme.get("TEXT_SECONDARY")),
-            ft.Text(
-                "GPU",
-                size=18,
-                weight=ft.FontWeight.BOLD,
-                color=theme.get("TEXT_PRIMARY")),
+            gpu_icon,
+            gpu_label,
             ft.Container(expand=True),
             gpu_dd
         ], spacing=8),
@@ -826,16 +936,15 @@ async def main(page: ft.Page) -> None:
     mem_used: ft.Text = ft.Text(
         "已用/总计: —", size=12, weight=ft.FontWeight.BOLD,
         color=theme.get("TEXT_TERTIARY"))
+    mem_icon: ft.Icon = ft.Icon(name="memory", color=theme.get("TEXT_SECONDARY"))
+    mem_label: ft.Text = ft.Text(
+        "内存",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     mem_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(name="memory", color=theme.get("TEXT_SECONDARY")),
-                ft.Text(
-                    "内存",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
+            ft.Row([mem_icon, mem_label], spacing=8),
             mem_bar, mem_pct, mem_freq, mem_used
         ], spacing=8, expand=True),
         height=CARD_H_ROW2,
@@ -846,16 +955,15 @@ async def main(page: ft.Page) -> None:
 
     disk_list: ft.Column = ft.Column(
         spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
+    storage_icon: ft.Icon = ft.Icon(name="storage", color=theme.get("TEXT_SECONDARY"))
+    storage_label: ft.Text = ft.Text(
+        "存储",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     storage_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(name="storage", color=theme.get("TEXT_SECONDARY")),
-                ft.Text(
-                    "存储",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
+            ft.Row([storage_icon, storage_label], spacing=8),
             disk_list
         ], spacing=8, expand=True),
         height=CARD_H_ROW2,
@@ -874,18 +982,17 @@ async def main(page: ft.Page) -> None:
     net_dn: ft.Text = ft.Text(
         "—", size=13, weight=ft.FontWeight.BOLD,
         color=theme.get("TEXT_SECONDARY"))
+    net_icon: ft.Icon = ft.Icon(
+        name="network_check",
+        color=theme.get("TEXT_SECONDARY"))
+    net_label: ft.Text = ft.Text(
+        "网络",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     net_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(
-                    name="network_check",
-                    color=theme.get("TEXT_SECONDARY")),
-                ft.Text(
-                    "网络",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
+            ft.Row([net_icon, net_label], spacing=8),
             ft.Row([
                 ft.Row([net_up_icon, net_up], spacing=4),
                 ft.Row([net_dn_icon, net_dn], spacing=4)
@@ -990,16 +1097,15 @@ async def main(page: ft.Page) -> None:
         disabled=True
     )
 
+    weather_api_icon: ft.Icon = ft.Icon(name="cloud", color=theme.get("TEXT_SECONDARY"))
+    weather_api_label: ft.Text = ft.Text(
+        "和风天气API",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     weather_api_config_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(name="cloud", color=theme.get("TEXT_SECONDARY")),
-                ft.Text(
-                    "和风天气API",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
+            ft.Row([weather_api_icon, weather_api_label], spacing=8),
 
             ft.Row([
                 weather_api_key_field,
@@ -1163,18 +1269,20 @@ async def main(page: ft.Page) -> None:
         on_click=lambda e: show_view("settings")
     )
 
+    weather_main_icon: ft.Icon = ft.Icon(
+        name="wb_sunny",
+        color=theme.get("TEXT_SECONDARY"),
+        size=22)
+    weather_main_label: ft.Text = ft.Text(
+        "实时天气",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     weather_main_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
             ft.Row([
-                ft.Icon(
-                    name="wb_sunny",
-                    color=theme.get("TEXT_SECONDARY"),
-                    size=22),
-                ft.Text(
-                    "实时天气",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY")),
+                weather_main_icon,
+                weather_main_label,
                 ft.Container(expand=True),
                 weather_current_city,
                 weather_settings_btn,
@@ -1314,19 +1422,18 @@ async def main(page: ft.Page) -> None:
 
             forecast_container.controls.append(forecast_row)
 
+    weather_forecast_icon: ft.Icon = ft.Icon(
+        name="date_range",
+        color=theme.get("TEXT_SECONDARY"),
+        size=20)
+    weather_forecast_label: ft.Text = ft.Text(
+        "天气预报",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     weather_forecast_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(
-                    name="date_range",
-                    color=theme.get("TEXT_SECONDARY"),
-                    size=20),
-                ft.Text(
-                    "天气预报",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
+            ft.Row([weather_forecast_icon, weather_forecast_label], spacing=8),
             ft.Container(height=8),
             ft.Container(content=forecast_container, expand=True),
         ], spacing=4, expand=True),
@@ -1413,16 +1520,12 @@ async def main(page: ft.Page) -> None:
         else:
             firmware_version_text.value = "固件: 未知"
             firmware_version_text.color = theme.get("TEXT_TERTIARY")
-        try:
+        with contextlib.suppress(BaseException):
             page.update()
-        except BaseException:
-            pass
 
     version_checker.on_version_checked = on_version_checked
 
     def trigger_version_check() -> None:
-        """触发版本检测（延迟执行以确保连接稳定）"""
-        import threading
 
         def delayed_check() -> None:
             import time
@@ -1430,6 +1533,16 @@ async def main(page: ft.Page) -> None:
             version_checker.check_version_async()
 
         threading.Thread(target=delayed_check, daemon=True).start()
+
+    def update_device_status_indicator(connected: bool) -> None:
+        """更新标题栏的设备连接状态"""
+        device_status_indicator.visible = connected
+        if connected:
+            device_status_indicator.content.controls[0].color = theme.get("GOOD")
+            device_status_indicator.content.controls[1].color = theme.get("GOOD")
+            device_status_indicator.content.controls[1].value = "设备已连接"
+        with contextlib.suppress(Exception):
+            page.update()
 
     def on_auto_reconnect(
         success: bool,
@@ -1454,17 +1567,16 @@ async def main(page: ft.Page) -> None:
 
             # 触发固件版本检测
             trigger_version_check()
+            update_device_status_indicator(True)
         else:
             port_dropdown.disabled = False
             port_status_text.value = "连接断开"
             port_status_text.color = theme.get("WARN")
             firmware_version_text.value = ""
             finsh_sender.stop()
-
-        try:
+            update_device_status_indicator(False)
+        with contextlib.suppress(BaseException):
             page.update()
-        except BaseException:
-            pass
 
     def on_connection_changed(connected: bool) -> None:
         """处理连接状态变化"""
@@ -1484,6 +1596,7 @@ async def main(page: ft.Page) -> None:
 
             # 触发固件版本检测
             trigger_version_check()
+            update_device_status_indicator(True)
         else:
             # 连接断开
             port_dropdown.disabled = False
@@ -1495,11 +1608,10 @@ async def main(page: ft.Page) -> None:
                 port_status_text.value = "已断开"
                 port_status_text.color = theme.get("TEXT_TERTIARY")
             finsh_sender.stop()
+            update_device_status_indicator(False)
 
-        try:
+        with contextlib.suppress(BaseException):
             page.update()
-        except BaseException:
-            pass
 
     serial_assistant.on_auto_reconnect = on_auto_reconnect
     serial_assistant.on_connection_changed = on_connection_changed
@@ -1524,11 +1636,11 @@ async def main(page: ft.Page) -> None:
             port_dropdown.disabled = True
             port_status_text.value = "已连接"
             port_status_text.color = theme.get("GOOD")
-
             finsh_sender.start()
             config_mgr.set_last_port(port)
             # 手动连接成功，触发版本检测
             trigger_version_check()
+            update_device_status_indicator(True)
         else:
             port_status_text.value = "连接失败"
             port_status_text.color = theme.get("BAD")
@@ -1553,16 +1665,15 @@ async def main(page: ft.Page) -> None:
         on_click=disconnect_port
     )
 
+    serial_icon: ft.Icon = ft.Icon(name="usb", color=theme.get("TEXT_SECONDARY"))
+    serial_label: ft.Text = ft.Text(
+        "设备连接",
+        size=18,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("TEXT_PRIMARY"))
     serial_config_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
-            ft.Row([
-                ft.Icon(name="usb", color=theme.get("TEXT_SECONDARY")),
-                ft.Text(
-                    "设备连接",
-                    size=18,
-                    weight=ft.FontWeight.BOLD,
-                    color=theme.get("TEXT_PRIMARY"))
-            ], spacing=8),
+            ft.Row([serial_icon, serial_label], spacing=8),
             ft.Row(
                 [port_dropdown, refresh_port_btn, disconnect_btn],
                 spacing=4),
@@ -1726,10 +1837,8 @@ async def main(page: ft.Page) -> None:
         else:
             firmware_update_btn.visible = False
 
-        try:
+        with contextlib.suppress(Exception):
             page.update()
-        except Exception:
-            pass
 
     def on_firmware_status_changed(
         status: FirmwareUpdateStatus,
@@ -1741,10 +1850,8 @@ async def main(page: ft.Page) -> None:
     def on_firmware_progress_changed(progress: int) -> None:
         """固件进度变化回调"""
         firmware_progress_bar.value = progress / 100.0
-        try:
+        with contextlib.suppress(Exception):
             page.update()
-        except Exception:
-            pass
 
     firmware_updater.on_status_changed = on_firmware_status_changed
     firmware_updater.on_progress_changed = on_firmware_progress_changed
@@ -1796,9 +1903,6 @@ async def main(page: ft.Page) -> None:
                             text=True
                         )
                         file_path = result.stdout.strip()
-                        print(f"选择的文件路径: {file_path}")
-                        print(f"返回码: {result.returncode}")
-                        print(f"stderr: {result.stderr}")
                         
                         if file_path and result.returncode == 0:
                             class MockFile:
@@ -1812,17 +1916,13 @@ async def main(page: ft.Page) -> None:
                                     self.path = path
                             
                             mock_event = MockEvent(file_path)
-                            print(f"MockEvent files: {mock_event.files}")
-                            print(f"MockEvent files[0].path: {mock_event.files[0].path if mock_event.files else None}")
                             
                             # 直接调用，不用 run_task
                             on_firmware_file_picked(mock_event)
                             page.update()
                             
-                    except Exception as ex:
-                        print(f"文件选择错误: {ex}")
-                        import traceback
-                        traceback.print_exc()
+                    except Exception:
+                        pass
                 
                 threading.Thread(target=pick_with_osascript, daemon=True).start()
             else:
@@ -1992,10 +2092,8 @@ async def main(page: ft.Page) -> None:
             else:
                 led_status_text.value = "✗ 设备未连接"
                 led_status_text.color = theme.get("BAD")
-            try:
+            with contextlib.suppress(Exception):
                 page.update()
-            except Exception:
-                pass
         
         # ===== 亮度控制 =====
         brightness_value_text: ft.Text = ft.Text(
@@ -2186,54 +2284,6 @@ async def main(page: ft.Page) -> None:
             padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
         ))
         
-        # ===== 快捷操作 =====
-        def quick_demo() -> None:
-            import threading
-            import time as time_module
-            
-            def demo_sequence():
-                effects = [
-                    (LedEffect.STATIC, "FF0000", 1000),
-                    (LedEffect.BREATHING, "00FF00", 1500),
-                    (LedEffect.FLOWING, "0000FF", 1000),
-                    (LedEffect.BLINK, "FFFF00", 500),
-                    (LedEffect.RAINBOW, None, 2000),
-                ]
-                for effect, color, period in effects:
-                    if color:
-                        led_controller.set_effect_with_params(
-                            effect, color=color, period_ms=period
-                        )
-                    else:
-                        led_controller.set_effect_with_params(effect, period_ms=period)
-                    time_module.sleep(3)
-                led_controller.stop()
-            
-            threading.Thread(target=demo_sequence, daemon=True).start()
-        
-        quick_card: ft.Card = ft.Card(ft.Container(
-            content=ft.Column([
-                ft.Row([
-                    ft.Icon(name="bolt", color=theme.get("TEXT_SECONDARY")),
-                    ft.Text("快捷操作", size=16, weight=ft.FontWeight.BOLD,
-                           color=theme.get("TEXT_PRIMARY")),
-                ], spacing=8),
-                ft.Container(height=8),
-                ft.Row([
-                    ft.ElevatedButton(
-                        "演示模式", icon="play_arrow",
-                        on_click=lambda e: quick_demo(), height=36,
-                    ),
-                    ft.ElevatedButton(
-                        "全部关闭", icon="power_settings_new",
-                        on_click=lambda e: (led_controller.turn_off(), update_led_status(), page.update()),
-                        height=36,
-                    ),
-                ], spacing=8),
-            ], spacing=4),
-            padding=16, bgcolor=theme.get("CARD_BG_ALPHA"), border_radius=10
-        ))
-        
         update_led_status()
         
         return ft.Container(
@@ -2250,8 +2300,6 @@ async def main(page: ft.Page) -> None:
                 color_card,
                 ft.Container(height=8),
                 effect_card,
-                ft.Container(height=8),
-                quick_card,
             ], spacing=0, scroll=ft.ScrollMode.AUTO),
             padding=20, expand=True,
         )
@@ -2279,7 +2327,7 @@ async def main(page: ft.Page) -> None:
                 key=str(val)) for name,
             val in modifier_options]
         preset_options: list[ft.dropdown.Option] = [
-            ft.dropdown.Option(name) for name in PRESET_SHORTCUTS.keys()
+            ft.dropdown.Option(name) for name in PRESET_SHORTCUTS
         ]
 
         combo_controls: dict[tuple[int, int], dict[str, Any]] = {}
@@ -2664,10 +2712,8 @@ async def main(page: ft.Page) -> None:
                 if led_view is None:
                     led_view = create_led_view()
                 content_host.content = led_view
-        except Exception as e:
-            print(f"视图切换错误: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
+            pass
 
         for nav_item in nav_items:
             if not nav_item.is_separator:
@@ -2703,7 +2749,7 @@ async def main(page: ft.Page) -> None:
     nav_controls: list[ft.Control] = []
     nav_controls.append(ft.Container(height=8))
 
-    for i, nav_item in enumerate(nav_items[:3]):
+    for nav_item in nav_items[:3]:
         nav_controls.append(ft.Row(
             controls=[nav_item.container],
             alignment=ft.MainAxisAlignment.CENTER,
@@ -2799,17 +2845,15 @@ async def main(page: ft.Page) -> None:
         weather_api_key_field.value = config.get('api_key', '')
         weather_api_host_field.value = config.get('api_host', '')
         weather_use_jwt_switch.value = config.get('use_jwt', False)
-        weather_default_city_field.value = config.get('default_city', '城市名')
+        weather_default_city_field.value = config.get("default_city", "城市名")
 
         update_weather_config()
 
     initialize_weather_config()
 
-    if weather_api.get_config().get('api_configured', False):
-        try:
+    if weather_api.get_config().get("api_configured", False):
+        with contextlib.suppress(BaseException):
             update_weather()
-        except BaseException:
-            pass
 
     def build_disks(items: list[DiskData]) -> None:
         disk_list.controls.clear()
@@ -2864,6 +2908,9 @@ async def main(page: ft.Page) -> None:
         for nav_item in nav_items:
             nav_item.update_theme_colors(theme)
 
+        # CPU card
+        cpu_icon.color = theme.get("TEXT_SECONDARY")
+        cpu_label.color = theme.get("TEXT_PRIMARY")
         cpu_title.color = theme.get("TEXT_PRIMARY")
         cpu_bar.color = theme.get("ACCENT")
         cpu_bar.bgcolor = theme.get("BAR_BG_ALPHA")
@@ -2873,6 +2920,9 @@ async def main(page: ft.Page) -> None:
         cpu_power.color = theme.get("TEXT_TERTIARY")
         cpu_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
 
+        # GPU card
+        gpu_icon.color = theme.get("TEXT_SECONDARY")
+        gpu_label.color = theme.get("TEXT_PRIMARY")
         gpu_bar.color = theme.get("ACCENT")
         gpu_bar.bgcolor = theme.get("BAR_BG_ALPHA")
         gpu_usage.color = theme.get("TEXT_SECONDARY")
@@ -2882,6 +2932,9 @@ async def main(page: ft.Page) -> None:
         gpu_power.color = theme.get("TEXT_TERTIARY")
         gpu_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
 
+        # Memory card
+        mem_icon.color = theme.get("TEXT_SECONDARY")
+        mem_label.color = theme.get("TEXT_PRIMARY")
         mem_bar.color = theme.get("ACCENT")
         mem_bar.bgcolor = theme.get("BAR_BG_ALPHA")
         mem_pct.color = theme.get("TEXT_SECONDARY")
@@ -2889,29 +2942,36 @@ async def main(page: ft.Page) -> None:
         mem_used.color = theme.get("TEXT_TERTIARY")
         mem_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
 
+        # Storage card
+        storage_icon.color = theme.get("TEXT_SECONDARY")
+        storage_label.color = theme.get("TEXT_PRIMARY")
         storage_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
 
         for disk_container in disk_list.controls:
-            if hasattr(disk_container, 'content'):
-                if hasattr(disk_container.content, 'controls'):
-                    disk_container.bgcolor = theme.get("BAR_BG_ALPHA")
-                    for ctrl in disk_container.content.controls:
-                        if hasattr(ctrl, 'color'):
-                            if (hasattr(ctrl, 'weight') and
-                                    ctrl.weight == ft.FontWeight.BOLD):
-                                ctrl.color = theme.get("TEXT_PRIMARY")
-                            elif isinstance(ctrl, ft.ProgressBar):
-                                ctrl.color = theme.get("ACCENT")
-                                ctrl.bgcolor = theme.get("BAR_BG_ALPHA")
-                            else:
-                                ctrl.color = theme.get("TEXT_SECONDARY")
+            if hasattr(disk_container, "content") and hasattr(disk_container.content, "controls"):
+                disk_container.bgcolor = theme.get("BAR_BG_ALPHA")
+                for ctrl in disk_container.content.controls:
+                    if hasattr(ctrl, "color"):
+                        if hasattr(ctrl, "weight") and ctrl.weight == ft.FontWeight.BOLD:
+                            ctrl.color = theme.get("TEXT_PRIMARY")
+                        elif isinstance(ctrl, ft.ProgressBar):
+                            ctrl.color = theme.get("ACCENT")
+                            ctrl.bgcolor = theme.get("BAR_BG_ALPHA")
+                        else:
+                            ctrl.color = theme.get("TEXT_SECONDARY")
 
+        # Network card
+        net_icon.color = theme.get("TEXT_SECONDARY")
+        net_label.color = theme.get("TEXT_PRIMARY")
         net_up_icon.color = theme.get("TEXT_SECONDARY")
         net_up.color = theme.get("TEXT_SECONDARY")
         net_dn_icon.color = theme.get("TEXT_SECONDARY")
         net_dn.color = theme.get("TEXT_SECONDARY")
         net_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
 
+        # Weather main card
+        weather_main_icon.color = theme.get("TEXT_SECONDARY")
+        weather_main_label.color = theme.get("TEXT_PRIMARY")
         weather_current_city.color = theme.get("TEXT_SECONDARY")
         weather_temp.color = theme.get("TEXT_PRIMARY")
         weather_feels_like.color = theme.get("TEXT_SECONDARY")
@@ -2927,43 +2987,51 @@ async def main(page: ft.Page) -> None:
         ]:
             ctrl.color = theme.get("TEXT_TERTIARY")
 
+        # Weather forecast card
+        weather_forecast_icon.color = theme.get("TEXT_SECONDARY")
+        weather_forecast_label.color = theme.get("TEXT_PRIMARY")
         weather_forecast_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
 
+        # Serial config card
+        serial_icon.color = theme.get("TEXT_SECONDARY")
+        serial_label.color = theme.get("TEXT_PRIMARY")
         serial_config_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
 
         firmware_update_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
         firmware_progress_bar.color = theme.get("ACCENT")
         firmware_progress_bar.bgcolor = theme.get("BAR_BG_ALPHA")
 
+        # Weather API config card
+        weather_api_icon.color = theme.get("TEXT_SECONDARY")
+        weather_api_label.color = theme.get("TEXT_PRIMARY")
         weather_api_config_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
         weather_config_status.color = theme.get("TEXT_TERTIARY")
 
-        if hasattr(settings_view, 'content'):
-            if hasattr(settings_view.content, 'controls'):
-                for ctrl in settings_view.content.controls:
-                    if hasattr(ctrl, 'color'):
-                        if hasattr(ctrl, 'size') and ctrl.size == 24:
-                            ctrl.color = theme.get("TEXT_PRIMARY")
-                        else:
-                            ctrl.color = theme.get("TEXT_TERTIARY")
+        if hasattr(settings_view, "content") and hasattr(settings_view.content, "controls"):
+            for ctrl in settings_view.content.controls:
+                if hasattr(ctrl, "color"):
+                    if hasattr(ctrl, "size") and ctrl.size == 24:
+                        ctrl.color = theme.get("TEXT_PRIMARY")
+                    else:
+                        ctrl.color = theme.get("TEXT_TERTIARY")
 
-        if hasattr(about_view, 'content'):
-            if hasattr(about_view.content, 'controls'):
-                for ctrl in about_view.content.controls:
-                    if hasattr(ctrl, 'color'):
-                        if hasattr(ctrl, 'size'):
-                            if ctrl.size == 24:
-                                ctrl.color = theme.get("TEXT_PRIMARY")
-                            elif ctrl.size == 16:
-                                ctrl.color = theme.get("TEXT_SECONDARY")
-                            else:
-                                ctrl.color = theme.get("TEXT_TERTIARY")
+        if hasattr(about_view, "content") and hasattr(about_view.content, "controls"):
+            for ctrl in about_view.content.controls:
+                if hasattr(ctrl, "color") and hasattr(ctrl, "size"):
+                    if ctrl.size == 24:
+                        ctrl.color = theme.get("TEXT_PRIMARY")
+                    elif ctrl.size == 16:
+                        ctrl.color = theme.get("TEXT_SECONDARY")
+                    else:
+                        ctrl.color = theme.get("TEXT_TERTIARY")
 
         if theme.current_theme == "light":
             shell.bgcolor = "#F0F0F0"
         else:
             shell.bgcolor = "#1A1A1A"
-
+        if device_status_indicator.visible:
+            device_status_indicator.content.controls[0].color = theme.get("GOOD")
+            device_status_indicator.content.controls[1].color = theme.get("GOOD")
     async def updater() -> None:
         hw_ui_updated: bool = False  # 标记是否已更新硬件UI
 
@@ -2980,7 +3048,14 @@ async def main(page: ft.Page) -> None:
                     ft.dropdown.Option(str(i), text=name)
                     for i, name in enumerate(new_gpu_names)
                 ]
-                gpu_dd.value = "0"
+                # 使用保存的GPU索引，但要确保索引有效
+                valid_index = min(saved_gpu_index, len(new_gpu_names) - 1)
+                valid_index = max(0, valid_index)
+                gpu_dd.value = str(valid_index)
+                # 如果索引被修正，同步更新finsh_sender和配置
+                if valid_index != saved_gpu_index:
+                    finsh_sender.set_gpu_index(valid_index)
+                    config_mgr.set_gpu_index(valid_index)
                 # 构建磁盘列表
                 if current_view["name"] == "performance":
                     build_disks(hw_monitor.get_disk_data())

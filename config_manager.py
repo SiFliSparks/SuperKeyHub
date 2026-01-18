@@ -2,6 +2,7 @@
 """
 配置管理
 """
+
 import json
 import os
 import platform
@@ -10,9 +11,9 @@ from typing import Any, Union
 
 # 平台检测
 SYSTEM: str = platform.system().lower()
-IS_WINDOWS: bool = SYSTEM == 'windows'
-IS_MACOS: bool = SYSTEM == 'darwin'
-IS_LINUX: bool = SYSTEM == 'linux'
+IS_WINDOWS: bool = SYSTEM == "windows"
+IS_MACOS: bool = SYSTEM == "darwin"
+IS_LINUX: bool = SYSTEM == "linux"
 
 
 class ConfigManager:
@@ -24,38 +25,41 @@ class ConfigManager:
         # 根据平台设置配置目录
         if IS_WINDOWS:
             # Windows: %APPDATA%/SuperKey
-            appdata: str = os.environ.get('APPDATA', os.path.expanduser('~'))
-            self.config_dir: Path = Path(appdata) / 'SuperKey'
+            appdata: str = os.environ.get("APPDATA", os.path.expanduser("~"))
+            self.config_dir: Path = Path(appdata) / "SuperKey"
         elif IS_MACOS:
             # macOS: ~/Library/Application Support/SuperKey
             self.config_dir = (
-                Path.home() / 'Library' / 'Application Support' / 'SuperKey'
+                Path.home() / "Library" / "Application Support" / "SuperKey"
             )
         else:
             # Linux: ~/.config/SuperKey
             config_home: Union[str, Path] = os.environ.get(
-                'XDG_CONFIG_HOME', Path.home() / '.config'
+                "XDG_CONFIG_HOME", Path.home() / ".config"
             )
-            self.config_dir = Path(config_home) / 'SuperKey'
+            self.config_dir = Path(config_home) / "SuperKey"
 
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_path: Path = self.config_dir / self.CONFIG_FILENAME
 
         # 默认配置
         self._default_config: dict[str, dict[str, Any]] = {
-            'weather': {
-                'api_key': '',
-                'api_host': '',
-                'use_jwt': False,
-                'default_city': '杭州',
+            "weather": {
+                "api_key": "",
+                "api_host": "",
+                "use_jwt": False,
+                "default_city": "杭州",
             },
-            'serial': {
-                'last_port': '',
-                'auto_connect': True,
+            "serial": {
+                "last_port": "",
+                "auto_connect": True,
             },
-            'app': {
-                'minimize_to_tray': True,   # 关闭时最小化到托盘
-                'auto_start': False,        # 开机自启动
+            "hardware": {
+                "gpu_index": 0,  # 选择的GPU索引
+            },
+            "app": {
+                "minimize_to_tray": True,  # 关闭时最小化到托盘
+                "auto_start": False,  # 开机自启动
             },
         }
 
@@ -65,7 +69,7 @@ class ConfigManager:
         """从文件加载配置"""
         if self.config_path.exists():
             try:
-                with open(self.config_path, encoding='utf-8') as f:
+                with open(self.config_path, encoding="utf-8") as f:
                     loaded: dict[str, Any] = json.load(f)
                 return self._merge_config(self._default_config, loaded)
             except Exception:
@@ -73,16 +77,16 @@ class ConfigManager:
         return self._default_config.copy()
 
     def _merge_config(
-        self,
-        default: dict[str, Any],
-        loaded: dict[str, Any]
+        self, default: dict[str, Any], loaded: dict[str, Any]
     ) -> dict[str, Any]:
         """合并配置，保留默认值中缺失的键"""
         result: dict[str, Any] = default.copy()
         for key, value in loaded.items():
-            if (key in result
-                    and isinstance(result[key], dict)
-                    and isinstance(value, dict)):
+            if (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
                 result[key] = self._merge_config(result[key], value)
             else:
                 result[key] = value
@@ -91,7 +95,7 @@ class ConfigManager:
     def save(self) -> bool:
         """保存配置到文件"""
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(self._config, f, indent=2, ensure_ascii=False)
             return True
         except Exception:
@@ -105,26 +109,26 @@ class ConfigManager:
 
     def get_weather_config(self) -> dict[str, Any]:
         """获取天气API配置"""
-        return self._config.get('weather', {}).copy()
+        return self._config.get("weather", {}).copy()
 
     def set_weather_config(
         self,
         api_key: str | None = None,
         api_host: str | None = None,
         use_jwt: bool | None = None,
-        default_city: str | None = None
+        default_city: str | None = None,
     ) -> None:
         """设置并保存天气API配置"""
-        weather: dict[str, Any] = self._config.setdefault('weather', {})
+        weather: dict[str, Any] = self._config.setdefault("weather", {})
 
         if api_key is not None:
-            weather['api_key'] = api_key
+            weather["api_key"] = api_key
         if api_host is not None:
-            weather['api_host'] = api_host
+            weather["api_host"] = api_host
         if use_jwt is not None:
-            weather['use_jwt'] = use_jwt
+            weather["use_jwt"] = use_jwt
         if default_city is not None:
-            weather['default_city'] = default_city
+            weather["default_city"] = default_city
 
         self.save()
 
@@ -132,35 +136,46 @@ class ConfigManager:
 
     def get_last_port(self) -> str:
         """获取上次使用的端口"""
-        return self._config.get('serial', {}).get('last_port', '')
+        return self._config.get("serial", {}).get("last_port", "")
 
     def set_last_port(self, port: str) -> None:
         """保存上次使用的端口"""
-        self._config.setdefault('serial', {})['last_port'] = port
+        self._config.setdefault("serial", {})["last_port"] = port
         self.save()
 
     def should_auto_connect(self) -> bool:
         """是否自动连接"""
-        return self._config.get('serial', {}).get('auto_connect', True)
+        return self._config.get("serial", {}).get("auto_connect", True)
 
     # ===== 应用配置 =====
 
     def should_minimize_to_tray(self) -> bool:
         """关闭时是否最小化到托盘"""
-        return self._config.get('app', {}).get('minimize_to_tray', True)
+        return self._config.get("app", {}).get("minimize_to_tray", True)
 
     def set_minimize_to_tray(self, value: bool) -> None:
         """设置关闭时是否最小化到托盘"""
-        self._config.setdefault('app', {})['minimize_to_tray'] = value
+        self._config.setdefault("app", {})["minimize_to_tray"] = value
         self.save()
 
     def is_auto_start_enabled(self) -> bool:
         """是否开机自启动"""
-        return self._config.get('app', {}).get('auto_start', False)
+        return self._config.get("app", {}).get("auto_start", False)
 
     def set_auto_start(self, value: bool) -> None:
         """设置开机自启动"""
-        self._config.setdefault('app', {})['auto_start'] = value
+        self._config.setdefault("app", {})["auto_start"] = value
+        self.save()
+
+    # ===== 硬件配置 =====
+
+    def get_gpu_index(self) -> int:
+        """获取选择的GPU索引"""
+        return self._config.get("hardware", {}).get("gpu_index", 0)
+
+    def set_gpu_index(self, index: int) -> None:
+        """设置选择的GPU索引"""
+        self._config.setdefault("hardware", {})["gpu_index"] = max(0, index)
         self.save()
 
 
@@ -174,11 +189,3 @@ def get_config_manager() -> ConfigManager:
     if _instance is None:
         _instance = ConfigManager()
     return _instance
-
-
-if __name__ == "__main__":
-    # 测试
-    cm: ConfigManager = get_config_manager()
-    print(f"平台: {SYSTEM}")
-    print(f"配置文件路径: {cm.get_config_path()}")
-    print(f"天气配置: {cm.get_weather_config()}")

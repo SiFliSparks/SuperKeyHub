@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import re
@@ -136,19 +137,15 @@ class FirmwareUpdater:
         self._status = status
         self._status_message = message
         if self.on_status_changed:
-            try:
+            with contextlib.suppress(Exception):
                 self.on_status_changed(status, message)
-            except Exception:
-                pass
 
     def _set_progress(self, progress: int) -> None:
         """设置进度并触发回调"""
         self._progress = max(0, min(100, progress))
         if self.on_progress_changed:
-            try:
+            with contextlib.suppress(Exception):
                 self.on_progress_changed(self._progress)
-            except Exception:
-                pass
 
     def _find_sftool(self) -> str | None:
         """查找 sftool 可执行文件
@@ -261,10 +258,8 @@ class FirmwareUpdater:
     def _cleanup_temp(self) -> None:
         """清理临时目录"""
         if self._temp_dir and os.path.exists(self._temp_dir):
-            try:
+            with contextlib.suppress(Exception):
                 shutil.rmtree(self._temp_dir)
-            except Exception:
-                pass
         self._temp_dir = None
         self._extracted_files.clear()
 
@@ -313,7 +308,7 @@ class FirmwareUpdater:
                 file_found = False
                 
                 # 递归搜索文件
-                for root, dirs, files in os.walk(self._temp_dir):
+                for root, _dirs, files in os.walk(self._temp_dir):
                     if fw_file.name in files:
                         file_path = os.path.join(root, fw_file.name)
                         self._extracted_files[fw_file.name] = file_path
@@ -660,10 +655,8 @@ class FirmwareVersionChecker:
 
             # 触发回调
             if self.on_version_checked:
-                try:
+                with contextlib.suppress(Exception):
                     self.on_version_checked(version)
-                except Exception:
-                    pass
 
     def _do_check_version(self) -> str:
         """执行版本检测，返回版本字符串或"未知" """

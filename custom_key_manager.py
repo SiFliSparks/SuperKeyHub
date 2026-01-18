@@ -2,6 +2,7 @@
 """
 自定义按键管理
 """
+
 import json
 import os
 import platform
@@ -96,26 +97,68 @@ class KeyCode:
 # 按键名称映射
 KEY_NAME_MAP: dict[int, str] = {
     KeyCode.NONE: "无",
-    KeyCode.A: "A", KeyCode.B: "B", KeyCode.C: "C", KeyCode.D: "D",
-    KeyCode.E: "E", KeyCode.F: "F", KeyCode.G: "G", KeyCode.H: "H",
-    KeyCode.I: "I", KeyCode.J: "J", KeyCode.K: "K", KeyCode.L: "L",
-    KeyCode.M: "M", KeyCode.N: "N", KeyCode.O: "O", KeyCode.P: "P",
-    KeyCode.Q: "Q", KeyCode.R: "R", KeyCode.S: "S", KeyCode.T: "T",
-    KeyCode.U: "U", KeyCode.V: "V", KeyCode.W: "W", KeyCode.X: "X",
-    KeyCode.Y: "Y", KeyCode.Z: "Z",
-    KeyCode.N0: "0", KeyCode.N1: "1", KeyCode.N2: "2", KeyCode.N3: "3",
-    KeyCode.N4: "4", KeyCode.N5: "5", KeyCode.N6: "6", KeyCode.N7: "7",
-    KeyCode.N8: "8", KeyCode.N9: "9",
-    KeyCode.F1: "F1", KeyCode.F2: "F2", KeyCode.F3: "F3", KeyCode.F4: "F4",
-    KeyCode.F5: "F5", KeyCode.F6: "F6", KeyCode.F7: "F7", KeyCode.F8: "F8",
-    KeyCode.F9: "F9", KeyCode.F10: "F10", KeyCode.F11: "F11",
+    KeyCode.A: "A",
+    KeyCode.B: "B",
+    KeyCode.C: "C",
+    KeyCode.D: "D",
+    KeyCode.E: "E",
+    KeyCode.F: "F",
+    KeyCode.G: "G",
+    KeyCode.H: "H",
+    KeyCode.I: "I",
+    KeyCode.J: "J",
+    KeyCode.K: "K",
+    KeyCode.L: "L",
+    KeyCode.M: "M",
+    KeyCode.N: "N",
+    KeyCode.O: "O",
+    KeyCode.P: "P",
+    KeyCode.Q: "Q",
+    KeyCode.R: "R",
+    KeyCode.S: "S",
+    KeyCode.T: "T",
+    KeyCode.U: "U",
+    KeyCode.V: "V",
+    KeyCode.W: "W",
+    KeyCode.X: "X",
+    KeyCode.Y: "Y",
+    KeyCode.Z: "Z",
+    KeyCode.N0: "0",
+    KeyCode.N1: "1",
+    KeyCode.N2: "2",
+    KeyCode.N3: "3",
+    KeyCode.N4: "4",
+    KeyCode.N5: "5",
+    KeyCode.N6: "6",
+    KeyCode.N7: "7",
+    KeyCode.N8: "8",
+    KeyCode.N9: "9",
+    KeyCode.F1: "F1",
+    KeyCode.F2: "F2",
+    KeyCode.F3: "F3",
+    KeyCode.F4: "F4",
+    KeyCode.F5: "F5",
+    KeyCode.F6: "F6",
+    KeyCode.F7: "F7",
+    KeyCode.F8: "F8",
+    KeyCode.F9: "F9",
+    KeyCode.F10: "F10",
+    KeyCode.F11: "F11",
     KeyCode.F12: "F12",
-    KeyCode.ENTER: "Enter", KeyCode.ESCAPE: "Esc",
+    KeyCode.ENTER: "Enter",
+    KeyCode.ESCAPE: "Esc",
     KeyCode.BACKSPACE: "Backspace",
-    KeyCode.TAB: "Tab", KeyCode.SPACE: "Space", KeyCode.DELETE: "Delete",
-    KeyCode.PAGE_UP: "PgUp", KeyCode.PAGE_DOWN: "PgDn",
-    KeyCode.UP: "↑", KeyCode.DOWN: "↓", KeyCode.LEFT: "←", KeyCode.RIGHT: "→",
-    KeyCode.HOME: "Home", KeyCode.END: "End",
+    KeyCode.TAB: "Tab",
+    KeyCode.SPACE: "Space",
+    KeyCode.DELETE: "Delete",
+    KeyCode.PAGE_UP: "PgUp",
+    KeyCode.PAGE_DOWN: "PgDn",
+    KeyCode.UP: "↑",
+    KeyCode.DOWN: "↓",
+    KeyCode.LEFT: "←",
+    KeyCode.RIGHT: "→",
+    KeyCode.HOME: "Home",
+    KeyCode.END: "End",
 }
 
 NAME_TO_KEY: dict[str, int] = {v: k for k, v in KEY_NAME_MAP.items()}
@@ -124,21 +167,55 @@ NAME_TO_KEY: dict[str, int] = {v: k for k, v in KEY_NAME_MAP.items()}
 # 用于将键盘输入事件转换为 HID keycode
 FLET_KEY_TO_HID: dict[str, int] = {
     # 字母键 (Flet 返回大写字母)
-    "A": KeyCode.A, "B": KeyCode.B, "C": KeyCode.C, "D": KeyCode.D,
-    "E": KeyCode.E, "F": KeyCode.F, "G": KeyCode.G, "H": KeyCode.H,
-    "I": KeyCode.I, "J": KeyCode.J, "K": KeyCode.K, "L": KeyCode.L,
-    "M": KeyCode.M, "N": KeyCode.N, "O": KeyCode.O, "P": KeyCode.P,
-    "Q": KeyCode.Q, "R": KeyCode.R, "S": KeyCode.S, "T": KeyCode.T,
-    "U": KeyCode.U, "V": KeyCode.V, "W": KeyCode.W, "X": KeyCode.X,
-    "Y": KeyCode.Y, "Z": KeyCode.Z,
+    "A": KeyCode.A,
+    "B": KeyCode.B,
+    "C": KeyCode.C,
+    "D": KeyCode.D,
+    "E": KeyCode.E,
+    "F": KeyCode.F,
+    "G": KeyCode.G,
+    "H": KeyCode.H,
+    "I": KeyCode.I,
+    "J": KeyCode.J,
+    "K": KeyCode.K,
+    "L": KeyCode.L,
+    "M": KeyCode.M,
+    "N": KeyCode.N,
+    "O": KeyCode.O,
+    "P": KeyCode.P,
+    "Q": KeyCode.Q,
+    "R": KeyCode.R,
+    "S": KeyCode.S,
+    "T": KeyCode.T,
+    "U": KeyCode.U,
+    "V": KeyCode.V,
+    "W": KeyCode.W,
+    "X": KeyCode.X,
+    "Y": KeyCode.Y,
+    "Z": KeyCode.Z,
     # 数字键
-    "0": KeyCode.N0, "1": KeyCode.N1, "2": KeyCode.N2, "3": KeyCode.N3,
-    "4": KeyCode.N4, "5": KeyCode.N5, "6": KeyCode.N6, "7": KeyCode.N7,
-    "8": KeyCode.N8, "9": KeyCode.N9,
+    "0": KeyCode.N0,
+    "1": KeyCode.N1,
+    "2": KeyCode.N2,
+    "3": KeyCode.N3,
+    "4": KeyCode.N4,
+    "5": KeyCode.N5,
+    "6": KeyCode.N6,
+    "7": KeyCode.N7,
+    "8": KeyCode.N8,
+    "9": KeyCode.N9,
     # 功能键
-    "F1": KeyCode.F1, "F2": KeyCode.F2, "F3": KeyCode.F3, "F4": KeyCode.F4,
-    "F5": KeyCode.F5, "F6": KeyCode.F6, "F7": KeyCode.F7, "F8": KeyCode.F8,
-    "F9": KeyCode.F9, "F10": KeyCode.F10, "F11": KeyCode.F11,
+    "F1": KeyCode.F1,
+    "F2": KeyCode.F2,
+    "F3": KeyCode.F3,
+    "F4": KeyCode.F4,
+    "F5": KeyCode.F5,
+    "F6": KeyCode.F6,
+    "F7": KeyCode.F7,
+    "F8": KeyCode.F8,
+    "F9": KeyCode.F9,
+    "F10": KeyCode.F10,
+    "F11": KeyCode.F11,
     "F12": KeyCode.F12,
     # 特殊键
     "Enter": KeyCode.ENTER,
@@ -239,9 +316,7 @@ class CustomKeyManager:
 
     GROUP_ID: int = 0  # 固定为组0
 
-    def __init__(
-        self, send_command_func: Callable[[str], bool] | None = None
-    ) -> None:
+    def __init__(self, send_command_func: Callable[[str], bool] | None = None) -> None:
         self.config: CustomKeyConfig = CustomKeyConfig()
         self.send_command: Callable[[str], bool] | None = send_command_func
         self._config_path: Path = self._get_config_path()
@@ -249,58 +324,52 @@ class CustomKeyManager:
 
     def _get_config_path(self) -> Path:
         system: str = platform.system().lower()
-        if system == 'windows':
-            base: Path = Path(os.environ.get('APPDATA', ''))
-        elif system == 'darwin':
-            base = Path.home() / 'Library' / 'Application Support'
+        if system == "windows":
+            base: Path = Path(os.environ.get("APPDATA", ""))
+        elif system == "darwin":
+            base = Path.home() / "Library" / "Application Support"
         else:
-            base = Path.home() / '.config'
+            base = Path.home() / ".config"
 
-        config_dir: Path = base / 'SuperKey'
+        config_dir: Path = base / "SuperKey"
         config_dir.mkdir(parents=True, exist_ok=True)
-        return config_dir / 'custom_keys.json'
+        return config_dir / "custom_keys.json"
 
     def load_config(self) -> None:
         """从本地加载配置"""
         try:
             if self._config_path.exists():
-                with open(self._config_path, encoding='utf-8') as f:
+                with open(self._config_path, encoding="utf-8") as f:
                     data: dict[str, Any] = json.load(f)
-                    for ki, kdata in enumerate(data.get('keys', [])):
+                    for ki, kdata in enumerate(data.get("keys", [])):
                         if ki < 3:
                             key: CustomKey = self.config.keys[ki]
-                            key.enabled = kdata.get('enabled', False)
-                            key.name = kdata.get('name', '')
-                            combos: list[dict[str, int]] = kdata.get(
-                                'combos', []
-                            )
+                            key.enabled = kdata.get("enabled", False)
+                            key.name = kdata.get("name", "")
+                            combos: list[dict[str, int]] = kdata.get("combos", [])
                             for ci, cdata in enumerate(combos):
                                 if ci < 4:
-                                    key.combos[ci].modifier = cdata.get(
-                                        'modifier', 0
-                                    )
-                                    key.combos[ci].keycode = cdata.get(
-                                        'keycode', 0
-                                    )
+                                    key.combos[ci].modifier = cdata.get("modifier", 0)
+                                    key.combos[ci].keycode = cdata.get("keycode", 0)
         except Exception:
             pass
 
     def save_config(self) -> None:
         """保存配置到本地"""
         try:
-            data: dict[str, list[dict[str, Any]]] = {'keys': []}
+            data: dict[str, list[dict[str, Any]]] = {"keys": []}
             for key in self.config.keys:
                 kdata: dict[str, Any] = {
-                    'enabled': key.enabled,
-                    'name': key.name,
-                    'combos': [
-                        {'modifier': c.modifier, 'keycode': c.keycode}
+                    "enabled": key.enabled,
+                    "name": key.name,
+                    "combos": [
+                        {"modifier": c.modifier, "keycode": c.keycode}
                         for c in key.combos
-                    ]
+                    ],
                 }
-                data['keys'].append(kdata)
+                data["keys"].append(kdata)
 
-            with open(self._config_path, 'w', encoding='utf-8') as f:
+            with open(self._config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
@@ -318,7 +387,7 @@ class CustomKeyManager:
         key: CustomKey = self.config.keys[key_idx]
         key.combos[0].modifier = mod
         key.combos[0].keycode = keycode
-        key.enabled = (keycode != 0)
+        key.enabled = keycode != 0
         key.name = preset_name
 
         # 清除其他combo
@@ -383,9 +452,7 @@ class CustomKeyManager:
         if combo.modifier & Modifier.GUI:
             parts.append("Win")
 
-        key_name: str = KEY_NAME_MAP.get(
-            combo.keycode, f"0x{combo.keycode:02X}"
-        )
+        key_name: str = KEY_NAME_MAP.get(combo.keycode, f"0x{combo.keycode:02X}")
         parts.append(key_name)
 
         return "+".join(parts)
@@ -458,9 +525,7 @@ class CustomKeyManager:
         if combo.modifier & Modifier.GUI:
             parts.append("Win")
 
-        key_name: str = KEY_NAME_MAP.get(
-            combo.keycode, f"0x{combo.keycode:02X}"
-        )
+        key_name: str = KEY_NAME_MAP.get(combo.keycode, f"0x{combo.keycode:02X}")
         if key_name != "无":
             parts.append(key_name)
 
@@ -472,7 +537,7 @@ _manager_instance: CustomKeyManager | None = None
 
 
 def get_custom_key_manager(
-    send_func: Callable[[str], bool] | None = None
+    send_func: Callable[[str], bool] | None = None,
 ) -> CustomKeyManager:
     """获取全局 CustomKeyManager 实例"""
     global _manager_instance

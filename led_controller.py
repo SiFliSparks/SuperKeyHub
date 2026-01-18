@@ -3,6 +3,7 @@
 LED灯光效果控制器模块
 通过串口发送命令控制RGB LED效果
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
 
 class LedEffect(Enum):
     """LED效果类型"""
+
     STATIC = "static"
     BREATHING = "breathing"
     FLOWING = "flowing"
@@ -26,6 +28,7 @@ class LedEffect(Enum):
 @dataclass
 class LedColorPreset:
     """预设颜色"""
+
     name: str
     display_name: str
     color: str  # 十六进制颜色 RRGGBB
@@ -193,7 +196,7 @@ class LedController:
         effect: LedEffect,
         color: str | None = None,
         period_ms: int | None = None,
-        brightness: int | None = None
+        brightness: int | None = None,
     ) -> bool:
         """设置带参数的效果
 

@@ -113,11 +113,10 @@ class SerialAssistant:
             self.monitor_thread.join(timeout=1)
 
     def _monitor_worker(self) -> None:
+        import contextlib
         while not self.stop_monitor.is_set():
-            try:
+            with contextlib.suppress(Exception):
                 self._check_connection_status()
-            except Exception:
-                pass
             for _ in range(int(self._reconnect_interval * 10)):
                 if self.stop_monitor.is_set():
                     break
@@ -150,10 +149,8 @@ class SerialAssistant:
             # 检查端口是否存在
             current_ports: list[str] = [
                 p.device for p in serial.tools.list_ports.comports()]
-            if self.config['port'] not in current_ports:
-                return False
             # USB CDC设备不检查CTS，只检查端口存在性
-            return True
+            return self.config["port"] in current_ports
         except Exception:
             return False
 
@@ -269,8 +266,7 @@ class SerialAssistant:
 
             return True
 
-        except Exception as e:
-            print(f"[SerialAssistant] Connect error: {e}")
+        except Exception:
             self.is_connected = False
             self.stats['errors'] += 1
             return False
@@ -283,9 +279,8 @@ class SerialAssistant:
             return False
         self.configure(port=port)
         success: bool = self.connect()
-        if success:
-            if self.on_auto_reconnect:
-                self.on_auto_reconnect(True, port, False)
+        if success and self.on_auto_reconnect:
+            self.on_auto_reconnect(True, port, False)
         return success
 
     def get_available_ports(self) -> list[dict[str, str]]:
@@ -400,14 +395,15 @@ class SerialAssistant:
         self._connection_lost = False
         self.stop_auto_send()
         self.stop_threads.set()
+        # 缩短超时时间，线程是 daemon 模式会自动退出
         if self.rx_thread and self.rx_thread.is_alive():
-            self.rx_thread.join(timeout=1)
+            self.rx_thread.join(timeout=0.3)
         if self.tx_thread and self.tx_thread.is_alive():
-            self.tx_thread.join(timeout=1)
+            self.tx_thread.join(timeout=0.3)
         if self.serial_port and self.serial_port.is_open:
             try:
-                self.serial_port.dtr = False  # 断开前通知设备
-                time.sleep(0.05)
+                self.serial_port.dtr = False
+                time.sleep(0.02)  # 缩短等待时间
                 self.serial_port.close()
             except BaseException:
                 pass

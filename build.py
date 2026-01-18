@@ -651,9 +651,8 @@ def build_all(skip_installer: bool = False, skip_deps: bool = False) -> int:
     prepare_tools_dir()
 
     # macOS: 先编译原生库
-    if IS_MACOS:
-        if not build_macos_native():
-            print("[WARN] macOS原生库编译失败，继续构建...")
+    if IS_MACOS and not build_macos_native():
+        print("[WARN] macOS原生库编译失败，继续构建...")
 
     if not lint_code():
         print("[WARN] Lint 检查有 error，继续构建...")
