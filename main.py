@@ -49,6 +49,11 @@ from firmware_updater import (
     get_version_checker,
     set_version_checker_serial,
 )
+from app_updater import (
+    AppUpdater,
+    AppUpdateStatus,
+    get_app_updater,
+)
 
 # ============================================================================
 # Type Definitions
@@ -1773,6 +1778,163 @@ async def main(page: ft.Page) -> None:
         border_radius=10
     ))
 
+    # ==================== 应用更新检查卡片 ====================
+    app_updater: AppUpdater = get_app_updater(APP_VERSION)
+
+    app_update_status_text: ft.Text = ft.Text(
+        "点击检查更新",
+        size=12,
+        color=theme.get("TEXT_TERTIARY")
+    )
+
+    app_update_progress_bar: ft.ProgressBar = ft.ProgressBar(
+        width=320,
+        value=0,
+        color=theme.get("ACCENT"),
+        bgcolor="#E0E0E0" if theme.current_theme == "light" else "#3A3A3A",
+        visible=False,
+        bar_height=8,
+    )
+
+    # 进度条容器（带边框和背景）
+    app_update_progress_container: ft.Container = ft.Container(
+        content=app_update_progress_bar,
+        border_radius=4,
+        bgcolor="#F0F0F0" if theme.current_theme == "light" else "#2A2A2A",
+        border=ft.border.all(1, "#CCCCCC" if theme.current_theme == "light" else "#4A4A4A"),
+        padding=ft.padding.all(2),
+        visible=False,
+    )
+
+    # 进度百分比显示
+    app_update_progress_text: ft.Text = ft.Text(
+        "0%",
+        size=13,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("ACCENT"),
+        visible=False,
+        width=50,
+    )
+
+    app_check_update_btn: ft.ElevatedButton = ft.ElevatedButton(
+        "检查更新",
+        icon="refresh",
+    )
+
+    app_download_install_btn: ft.ElevatedButton = ft.ElevatedButton(
+        "下载并安装",
+        icon="download",
+        visible=False
+    )
+
+    def update_app_update_ui() -> None:
+        """更新应用更新界面状态"""
+        status_text, color_type = app_updater.get_status_display()
+        app_update_status_text.value = status_text
+
+        color_map = {
+            "good": theme.get("GOOD"),
+            "warn": theme.get("WARN"),
+            "bad": theme.get("BAD"),
+            "neutral": theme.get("TEXT_TERTIARY"),
+            "accent": theme.get("ACCENT"),
+        }
+        app_update_status_text.color = color_map.get(
+            color_type, theme.get("TEXT_TERTIARY")
+        )
+
+        # 更新进度条和百分比显示
+        if app_updater.status == AppUpdateStatus.DOWNLOADING:
+            progress = app_updater.progress
+            app_update_progress_bar.visible = True
+            app_update_progress_bar.value = progress / 100.0
+            app_update_progress_container.visible = True
+            app_update_progress_text.visible = True
+            app_update_progress_text.value = f"{progress}%"
+        else:
+            app_update_progress_bar.visible = False
+            app_update_progress_container.visible = False
+            app_update_progress_text.visible = False
+
+        # 更新按钮状态
+        if app_updater.is_busy:
+            app_check_update_btn.disabled = True
+            app_download_install_btn.disabled = True
+        else:
+            app_check_update_btn.disabled = False
+            app_download_install_btn.disabled = False
+
+        # 显示/隐藏下载按钮
+        if app_updater.can_download:
+            app_download_install_btn.visible = True
+        else:
+            app_download_install_btn.visible = False
+
+        with contextlib.suppress(Exception):
+            page.update()
+
+    def on_app_update_status_changed(
+        status: AppUpdateStatus,
+        message: str
+    ) -> None:
+        """应用更新状态变化回调"""
+        update_app_update_ui()
+
+    def on_app_update_progress_changed(progress: int) -> None:
+        """应用更新进度变化回调"""
+        app_update_progress_bar.value = progress / 100.0
+        app_update_progress_bar.visible = True
+        app_update_progress_container.visible = True
+        app_update_progress_text.value = f"{progress}%"
+        app_update_progress_text.visible = True
+        with contextlib.suppress(Exception):
+            page.update()
+
+    app_updater.on_status_changed = on_app_update_status_changed
+    app_updater.on_progress_changed = on_app_update_progress_changed
+
+    def on_check_update_click(e: ft.ControlEvent) -> None:
+        """检查更新按钮点击"""
+        app_updater.check_update()
+
+    def on_download_install_click(e: ft.ControlEvent) -> None:
+        """下载并安装按钮点击"""
+        app_updater.download_and_install()
+
+    app_check_update_btn.on_click = on_check_update_click
+    app_download_install_btn.on_click = on_download_install_click
+
+    app_update_card: ft.Card = ft.Card(ft.Container(
+        content=ft.Column([
+            ft.Row([
+                ft.Icon(name="system_update_alt", color=theme.get("TEXT_SECONDARY")),
+                ft.Text(
+                    "检查更新",
+                    size=18,
+                    weight=ft.FontWeight.BOLD,
+                    color=theme.get("TEXT_PRIMARY"))
+            ], spacing=8),
+            ft.Text(
+                f"当前版本: v{APP_VERSION}",
+                size=12,
+                color=theme.get("TEXT_TERTIARY")
+            ),
+            ft.Container(height=4),
+            ft.Row([
+                app_check_update_btn,
+                app_download_install_btn,
+            ], spacing=8),
+            ft.Row([
+                app_update_progress_container,
+                app_update_progress_text,
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            app_update_status_text,
+        ], spacing=8),
+        padding=16,
+        bgcolor=theme.get("CARD_BG_ALPHA"),
+        border_radius=10
+    ))
+
     # ==================== 固件更新卡片 ====================
     firmware_updater: FirmwareUpdater = get_firmware_updater()
     firmware_updater.set_serial_assistant(serial_assistant)
@@ -2022,6 +2184,7 @@ async def main(page: ft.Page) -> None:
                 ft.Container(content=app_settings_card, expand=True),
             ], spacing=12, alignment=ft.MainAxisAlignment.START,
                vertical_alignment=ft.CrossAxisAlignment.START),
+            app_update_card,
             firmware_update_card,
             weather_api_config_card,
         ], spacing=12, scroll=ft.ScrollMode.ADAPTIVE, expand=True),
@@ -3037,6 +3200,14 @@ async def main(page: ft.Page) -> None:
         firmware_progress_container.bgcolor = "#F0F0F0" if theme.current_theme == "light" else "#2A2A2A"
         firmware_progress_container.border = ft.border.all(1, "#CCCCCC" if theme.current_theme == "light" else "#4A4A4A")
         firmware_progress_text.color = theme.get("ACCENT")
+
+        # App update card
+        app_update_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
+        app_update_progress_bar.color = theme.get("ACCENT")
+        app_update_progress_bar.bgcolor = "#E0E0E0" if theme.current_theme == "light" else "#3A3A3A"
+        app_update_progress_container.bgcolor = "#F0F0F0" if theme.current_theme == "light" else "#2A2A2A"
+        app_update_progress_container.border = ft.border.all(1, "#CCCCCC" if theme.current_theme == "light" else "#4A4A4A")
+        app_update_progress_text.color = theme.get("ACCENT")
 
         # Weather API config card
         weather_api_icon.color = theme.get("TEXT_SECONDARY")
