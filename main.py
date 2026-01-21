@@ -1784,11 +1784,32 @@ async def main(page: ft.Page) -> None:
     )
 
     firmware_progress_bar: ft.ProgressBar = ft.ProgressBar(
-        width=400,
+        width=320,
         value=0,
         color=theme.get("ACCENT"),
-        bgcolor=theme.get("BAR_BG_ALPHA"),
-        visible=False
+        bgcolor="#E0E0E0" if theme.current_theme == "light" else "#3A3A3A",
+        visible=False,
+        bar_height=8,
+    )
+
+    # 进度条容器（带边框和背景）
+    firmware_progress_container: ft.Container = ft.Container(
+        content=firmware_progress_bar,
+        border_radius=4,
+        bgcolor="#F0F0F0" if theme.current_theme == "light" else "#2A2A2A",
+        border=ft.border.all(1, "#CCCCCC" if theme.current_theme == "light" else "#4A4A4A"),
+        padding=ft.padding.all(2),
+        visible=False,
+    )
+
+    # 进度百分比显示
+    firmware_progress_text: ft.Text = ft.Text(
+        "0%",
+        size=13,
+        weight=ft.FontWeight.BOLD,
+        color=theme.get("ACCENT"),
+        visible=False,
+        width=50,
     )
 
     firmware_file_info: ft.Text = ft.Text(
@@ -1820,12 +1841,18 @@ async def main(page: ft.Page) -> None:
             color_type, theme.get("TEXT_TERTIARY")
         )
 
-        # 更新进度条
+        # 更新进度条和百分比显示
         if firmware_updater.is_busy:
+            progress = firmware_updater.progress
             firmware_progress_bar.visible = True
-            firmware_progress_bar.value = firmware_updater.progress / 100.0
+            firmware_progress_bar.value = progress / 100.0
+            firmware_progress_container.visible = True
+            firmware_progress_text.visible = True
+            firmware_progress_text.value = f"{progress}%"
         else:
             firmware_progress_bar.visible = False
+            firmware_progress_container.visible = False
+            firmware_progress_text.visible = False
 
         # 更新按钮状态
         if firmware_updater.status == FirmwareUpdateStatus.VALID:
@@ -1850,6 +1877,10 @@ async def main(page: ft.Page) -> None:
     def on_firmware_progress_changed(progress: int) -> None:
         """固件进度变化回调"""
         firmware_progress_bar.value = progress / 100.0
+        firmware_progress_bar.visible = True
+        firmware_progress_container.visible = True
+        firmware_progress_text.value = f"{progress}%"
+        firmware_progress_text.visible = True
         with contextlib.suppress(Exception):
             page.update()
 
@@ -1968,7 +1999,10 @@ async def main(page: ft.Page) -> None:
                 firmware_update_btn,
             ], spacing=8),
             firmware_file_info,
-            firmware_progress_bar,
+            ft.Row([
+                firmware_progress_container,
+                firmware_progress_text,
+            ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             firmware_status_text,
         ], spacing=8),
         padding=16,
@@ -2999,7 +3033,10 @@ async def main(page: ft.Page) -> None:
 
         firmware_update_card.content.bgcolor = theme.get("CARD_BG_ALPHA")
         firmware_progress_bar.color = theme.get("ACCENT")
-        firmware_progress_bar.bgcolor = theme.get("BAR_BG_ALPHA")
+        firmware_progress_bar.bgcolor = "#E0E0E0" if theme.current_theme == "light" else "#3A3A3A"
+        firmware_progress_container.bgcolor = "#F0F0F0" if theme.current_theme == "light" else "#2A2A2A"
+        firmware_progress_container.border = ft.border.all(1, "#CCCCCC" if theme.current_theme == "light" else "#4A4A4A")
+        firmware_progress_text.color = theme.get("ACCENT")
 
         # Weather API config card
         weather_api_icon.color = theme.get("TEXT_SECONDARY")

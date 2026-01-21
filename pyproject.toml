@@ -1,14 +1,14 @@
 [project]
 name = "superkeyhub"
-version = "1.6.1"
-description = "SuperKey Hardware Monitor - Cross-platform hardware monitoring tool with native macOS support"
+version = "1.7.5"
+description = "SuperKeyHUB"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 authors = [
     { name = "xiebowen", email = "xiebowen1@outlook.com" },
 ]
-keywords = ["hardware", "monitor", "serial", "weather", "flet", "macos", "apple-silicon"]
+keywords = ["hardware", "monitor", "serial", "weather", "flet", "macos"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
@@ -24,7 +24,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "flet[all]>=0.21.0",
+    "flet[all]==0.28.2",
     "psutil>=5.9.0",
     "pyserial>=3.5",
     "requests>=2.31.0",

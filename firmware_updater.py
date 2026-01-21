@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-固件更新模块
+固件更新模块 (v3 - 基于时间间隔的进度追踪)
+
+根据实际测试，sftool 的输出特点：
+- Spinner: 0% 和 100% 几乎同时出现（间隔 < 0.5 秒）
+- Bar: 0% 后面跟着中间值（10%, 20%, 31%...），每次间隔约 1-2 秒
 """
 from __future__ import annotations
 
@@ -15,10 +19,10 @@ import tempfile
 import threading
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from serial_assistant import SerialAssistant
@@ -30,15 +34,15 @@ IS_WINDOWS: bool = SYSTEM == 'windows'
 
 class FirmwareUpdateStatus(Enum):
     """固件更新状态"""
-    IDLE = "idle"                       # 空闲
-    VALIDATING = "validating"           # 正在验证文件
-    VALID = "valid"                     # 文件有效
-    INVALID = "invalid"                 # 文件无效
-    PREPARING = "preparing"             # 准备中
-    FLASHING = "flashing"               # 正在烧录
-    SUCCESS = "success"                 # 烧录成功
-    FAILED = "failed"                   # 烧录失败
-    RECONNECTING = "reconnecting"       # 正在重连
+    IDLE = "idle"
+    VALIDATING = "validating"
+    VALID = "valid"
+    INVALID = "invalid"
+    PREPARING = "preparing"
+    FLASHING = "flashing"
+    SUCCESS = "success"
+    FAILED = "failed"
+    RECONNECTING = "reconnecting"
 
 
 @dataclass
@@ -51,13 +55,115 @@ class FirmwareFile:
 
 # 固件文件配置
 FIRMWARE_FILES: list[FirmwareFile] = [
+    FirmwareFile("bootloader.bin", "0x12208000", required=True),
+    FirmwareFile("ER_IROM1.bin", "0x12218000", required=True),
+    FirmwareFile("ER_IROM2.bin", "0x12660000", required=True),
+    FirmwareFile("ER_IROM3.bin", "0x12460000", required=True),
+    FirmwareFile("dfu_pan.bin", "0x12008000", required=True),
     FirmwareFile("ftab.bin", "0x12000000", required=True),
-    FirmwareFile("bootloader.bin", "0x12010000", required=True),
-    FirmwareFile("main.bin", "0x12020000", required=True),
 ]
 
 # sftool 配置
 SFTOOL_CHIP: str = "SF32LB52"
+
+
+@dataclass
+class ProgressTracker:
+    """
+    sftool 进度追踪器 (基于时间和中间值检测)
+    
+    检测策略：
+    1. 当看到 0% 时，记录时间，等待下一个值
+    2. 如果下一个值是 100% 且间隔 < 0.5 秒，这是 Spinner，忽略
+    3. 如果下一个值是中间值（1-99%），这是 Bar，开始追踪
+    4. Bar 完成时（看到 100%），增加已完成文件计数
+    """
+    total_files: int = 0
+    completed_bars: int = 0  # 完成的 Bar 数量（对应已完成的文件）
+    current_bar_progress: int = 0  # 当前 Bar 的进度 (0-100)
+    
+    # 状态追踪
+    last_zero_time: float = 0  # 上次看到 0% 的时间
+    is_in_bar: bool = False  # 是否正在追踪一个 Bar
+    waiting_for_next: bool = False  # 是否在等待 0% 后的下一个值
+    
+    # 阈值配置
+    SPINNER_MAX_DURATION: float = 0.5  # Spinner 的 0% 到 100% 最大间隔（秒）
+    
+    def process_percent(self, percent: int, timestamp: float) -> tuple[bool, int]:
+        """
+        处理一个百分比值
+        
+        Args:
+            percent: 百分比值 (0-100)
+            timestamp: 时间戳
+            
+        Returns:
+            (是否应该更新 UI 进度, 当前总体进度百分比 0-100)
+        """
+        should_update = False
+        
+        if percent == 0:
+            # 新的序列开始
+            self.last_zero_time = timestamp
+            self.waiting_for_next = True
+            
+            # 如果之前在 Bar 中且进度已经很高，认为上一个 Bar 完成了
+            if self.is_in_bar and self.current_bar_progress >= 90:
+                self.completed_bars += 1
+                should_update = True
+            
+            self.is_in_bar = False
+            self.current_bar_progress = 0
+            
+        elif percent == 100:
+            if self.waiting_for_next:
+                # 0% 后直接是 100%
+                duration = timestamp - self.last_zero_time
+                if duration < self.SPINNER_MAX_DURATION:
+                    # 这是 Spinner，忽略
+                    self.waiting_for_next = False
+                else:
+                    # 间隔较长，可能是 Bar 完成（虽然没看到中间值）
+                    if self.is_in_bar:
+                        self.completed_bars += 1
+                        self.current_bar_progress = 0  # 重置为0，不是100
+                        should_update = True
+                    self.waiting_for_next = False
+                    self.is_in_bar = False
+            elif self.is_in_bar:
+                # Bar 正常完成
+                self.completed_bars += 1
+                self.current_bar_progress = 0  # 重置为0，不是100
+                should_update = True
+                self.is_in_bar = False
+                self.waiting_for_next = False
+        else:
+            # 中间值 (1-99%)，这肯定是 Bar
+            self.is_in_bar = True
+            self.waiting_for_next = False
+            self.current_bar_progress = percent
+            should_update = True
+        
+        return should_update, self._calculate_total_progress()
+    
+    def _calculate_total_progress(self) -> int:
+        """计算总体进度 (0-100)"""
+        if self.total_files == 0:
+            return 0
+        
+        # 总进度 = (已完成的 Bar 数 * 100 + 当前 Bar 进度) / 总文件数
+        raw = (self.completed_bars * 100 + self.current_bar_progress) / self.total_files
+        return min(int(raw), 100)
+    
+    def reset(self, total_files: int):
+        """重置追踪器"""
+        self.total_files = total_files
+        self.completed_bars = 0
+        self.current_bar_progress = 0
+        self.last_zero_time = 0
+        self.is_in_bar = False
+        self.waiting_for_next = False
 
 
 class FirmwareUpdater:
@@ -68,50 +174,39 @@ class FirmwareUpdater:
         serial_assistant: SerialAssistant | None = None,
         sftool_path: str | None = None
     ) -> None:
-        """初始化固件更新器
-
-        Args:
-            serial_assistant: 串口助手实例
-            sftool_path: sftool 的路径，默认自动查找
-        """
         self.serial_assistant: SerialAssistant | None = serial_assistant
         self._sftool_path: str | None = sftool_path
         
-        # 状态
         self._status: FirmwareUpdateStatus = FirmwareUpdateStatus.IDLE
         self._status_message: str = ""
-        self._progress: int = 0  # 0-100
+        self._progress: int = 0
         
-        # 临时目录
         self._temp_dir: str | None = None
-        self._extracted_files: dict[str, str] = {}  # name -> path
+        self._extracted_files: dict[str, str] = {}
         
-        # 回调
         self.on_status_changed: Callable[[FirmwareUpdateStatus, str], None] | None = None
         self.on_progress_changed: Callable[[int], None] | None = None
         
-        # 线程锁
         self._lock: threading.Lock = threading.Lock()
         self._update_thread: threading.Thread | None = None
+        
+        # 进度追踪器
+        self._progress_tracker = ProgressTracker()
 
     @property
     def status(self) -> FirmwareUpdateStatus:
-        """获取当前状态"""
         return self._status
 
     @property
     def status_message(self) -> str:
-        """获取状态消息"""
         return self._status_message
 
     @property
     def progress(self) -> int:
-        """获取进度"""
         return self._progress
 
     @property
     def is_busy(self) -> bool:
-        """是否正在执行操作"""
         return self._status in [
             FirmwareUpdateStatus.VALIDATING,
             FirmwareUpdateStatus.PREPARING,
@@ -120,19 +215,9 @@ class FirmwareUpdater:
         ]
 
     def set_serial_assistant(self, serial_assistant: SerialAssistant) -> None:
-        """设置串口助手
-
-        Args:
-            serial_assistant: 串口助手实例
-        """
         self.serial_assistant = serial_assistant
 
-    def _set_status(
-        self,
-        status: FirmwareUpdateStatus,
-        message: str = ""
-    ) -> None:
-        """设置状态并触发回调"""
+    def _set_status(self, status: FirmwareUpdateStatus, message: str = "") -> None:
         self._status = status
         self._status_message = message
         if self.on_status_changed:
@@ -140,96 +225,68 @@ class FirmwareUpdater:
                 self.on_status_changed(status, message)
 
     def _set_progress(self, progress: int) -> None:
-        """设置进度并触发回调"""
         self._progress = max(0, min(100, progress))
         if self.on_progress_changed:
             with contextlib.suppress(Exception):
                 self.on_progress_changed(self._progress)
 
     def _find_sftool(self) -> str | None:
-        """查找 sftool 可执行文件
-
-        Returns:
-            sftool 路径，找不到返回 None
-        """
         if self._sftool_path and os.path.isfile(self._sftool_path):
             return self._sftool_path
 
-        # 根据平台确定可执行文件名
         system = platform.system()
         if system == 'Windows':
             sftool_names = ['sftool.exe']
-        else:  # macOS / Linux
+        else:
             sftool_names = ['sftool', 'sftool.bin']
 
-        # 可能的搜索路径
         search_paths: list[Path] = []
 
-        # 1. 当前程序目录（需要特殊处理 macOS .app 包）
         if getattr(sys, 'frozen', False):
-            # PyInstaller 打包后
             exe_path = Path(sys.executable)
             
             if system == 'Darwin' and '.app' in str(exe_path):
-                # macOS .app 包结构:
-                # SuperKeyHUB.app/
-                #   Contents/
-                #     MacOS/
-                #       SuperKeyHUB  (可执行文件)
-                #     Resources/
-                #       tools/
-                #         sftool     (我们要找的工具)
+                macos_dir = exe_path.parent
+                contents_dir = macos_dir.parent
+                resources_dir = contents_dir / "Resources"
                 
-                # 方法1: 从 MacOS 目录找到 Resources 目录
-                macos_dir = exe_path.parent  # .app/Contents/MacOS
-                contents_dir = macos_dir.parent  # .app/Contents
-                resources_dir = contents_dir / "Resources"  # .app/Contents/Resources
-                
-                # 优先搜索 Resources/tools 目录
                 for name in sftool_names:
                     search_paths.append(resources_dir / "tools" / name)
                     search_paths.append(resources_dir / name)
                 
-                # 也搜索 MacOS 目录（某些打包方式可能放在这里）
                 for name in sftool_names:
                     search_paths.append(macos_dir / "tools" / name)
                     search_paths.append(macos_dir / name)
                 
-                # 方法2: 使用 _MEIPASS (PyInstaller 临时目录)
                 if hasattr(sys, '_MEIPASS'):
                     meipass_dir = Path(sys._MEIPASS)
                     for name in sftool_names:
                         search_paths.append(meipass_dir / "tools" / name)
                         search_paths.append(meipass_dir / name)
             else:
-                # Windows 或 Linux，或者不在 .app 包内
                 app_dir = exe_path.parent
                 for name in sftool_names:
                     search_paths.append(app_dir / name)
                     search_paths.append(app_dir / "tools" / name)
                     search_paths.append(app_dir / "bin" / name)
                 
-                # PyInstaller _MEIPASS 目录
                 if hasattr(sys, '_MEIPASS'):
                     meipass_dir = Path(sys._MEIPASS)
                     for name in sftool_names:
                         search_paths.append(meipass_dir / "tools" / name)
                         search_paths.append(meipass_dir / name)
         else:
-            # 开发环境
             app_dir = Path(__file__).parent
             for name in sftool_names:
                 search_paths.append(app_dir / name)
                 search_paths.append(app_dir / "tools" / name)
                 search_paths.append(app_dir / "bin" / name)
 
-        # 2. PATH 环境变量
         path_dirs = os.environ.get("PATH", "").split(os.pathsep)
         for path_dir in path_dirs:
             for name in sftool_names:
                 search_paths.append(Path(path_dir) / name)
 
-        # 3. macOS: Homebrew 常见路径
         if system == 'Darwin':
             homebrew_paths = [
                 Path('/opt/homebrew/bin'),
@@ -239,12 +296,9 @@ class FirmwareUpdater:
                 for name in sftool_names:
                     search_paths.append(brew_path / name)
 
-        # 搜索
         for path in search_paths:
             if path.is_file():
-                # macOS/Linux: 检查是否有执行权限
                 if system != 'Windows' and not os.access(path, os.X_OK):
-                    # 尝试添加执行权限
                     try:
                         os.chmod(path, 0o755)
                     except Exception:
@@ -255,7 +309,6 @@ class FirmwareUpdater:
         return None
 
     def _cleanup_temp(self) -> None:
-        """清理临时目录"""
         if self._temp_dir and os.path.exists(self._temp_dir):
             with contextlib.suppress(Exception):
                 shutil.rmtree(self._temp_dir)
@@ -263,50 +316,35 @@ class FirmwareUpdater:
         self._extracted_files.clear()
 
     def validate_firmware_zip(self, zip_path: str) -> tuple[bool, str, list[str]]:
-        """验证固件 ZIP 文件
-
-        Args:
-            zip_path: ZIP 文件路径
-
-        Returns:
-            (是否有效, 消息, 找到的文件列表)
-        """
         self._set_status(FirmwareUpdateStatus.VALIDATING, "正在验证固件文件...")
         self._set_progress(0)
         
-        # 清理之前的临时文件
         self._cleanup_temp()
         
         found_files: list[str] = []
         missing_files: list[str] = []
 
         try:
-            # 检查文件是否存在
             if not os.path.isfile(zip_path):
                 self._set_status(FirmwareUpdateStatus.INVALID, "文件不存在")
                 return False, "文件不存在", []
 
-            # 检查是否是 ZIP 文件
             if not zipfile.is_zipfile(zip_path):
                 self._set_status(FirmwareUpdateStatus.INVALID, "不是有效的 ZIP 文件")
                 return False, "不是有效的 ZIP 文件", []
 
             self._set_progress(20)
 
-            # 创建临时目录
             self._temp_dir = tempfile.mkdtemp(prefix="superkey_fw_")
 
-            # 解压 ZIP 文件
             with zipfile.ZipFile(zip_path, 'r') as zf:
                 zf.extractall(self._temp_dir)
 
             self._set_progress(50)
 
-            # 在解压目录中查找所需的 bin 文件
             for fw_file in FIRMWARE_FILES:
                 file_found = False
                 
-                # 递归搜索文件
                 for root, _dirs, files in os.walk(self._temp_dir):
                     if fw_file.name in files:
                         file_path = os.path.join(root, fw_file.name)
@@ -320,7 +358,6 @@ class FirmwareUpdater:
 
             self._set_progress(80)
 
-            # 检查是否所有必需文件都找到了
             if missing_files:
                 msg = f"缺少必需文件: {', '.join(missing_files)}"
                 self._set_status(FirmwareUpdateStatus.INVALID, msg)
@@ -341,14 +378,6 @@ class FirmwareUpdater:
             return False, f"验证失败: {str(e)}", []
 
     def _build_flash_command(self, port: str) -> list[str]:
-        """构建烧录命令
-
-        Args:
-            port: 串口端口 (Windows: COM*, macOS: /dev/cu.*, Linux: /dev/ttyUSB*)
-
-        Returns:
-            命令参数列表
-        """
         sftool_path = self._find_sftool()
         if not sftool_path:
             sftool_name = "sftool.exe" if platform.system() == "Windows" else "sftool"
@@ -361,7 +390,6 @@ class FirmwareUpdater:
             "write_flash",
         ]
 
-        # 按地址顺序添加文件
         for fw_file in FIRMWARE_FILES:
             if fw_file.name in self._extracted_files:
                 file_path = self._extracted_files[fw_file.name]
@@ -369,61 +397,98 @@ class FirmwareUpdater:
 
         return cmd
 
-    def start_update(self) -> bool:
-        """开始固件更新
+    def _get_flash_file_count(self) -> int:
+        return len(self._extracted_files)
 
-        Returns:
-            是否成功启动更新
-        """
+    def start_update(self) -> bool:
         with self._lock:
             if self.is_busy:
                 return False
 
             if self._status != FirmwareUpdateStatus.VALID:
-                self._set_status(
-                    FirmwareUpdateStatus.FAILED,
-                    "请先验证固件文件"
-                )
+                self._set_status(FirmwareUpdateStatus.FAILED, "请先验证固件文件")
                 return False
 
             if not self._extracted_files:
-                self._set_status(
-                    FirmwareUpdateStatus.FAILED,
-                    "没有可用的固件文件"
-                )
+                self._set_status(FirmwareUpdateStatus.FAILED, "没有可用的固件文件")
                 return False
 
-            # 检查 sftool
             if not self._find_sftool():
                 sftool_name = "sftool.exe" if platform.system() == "Windows" else "sftool"
-                self._set_status(
-                    FirmwareUpdateStatus.FAILED,
-                    f"找不到 {sftool_name}，请将其放在程序目录下"
-                )
+                self._set_status(FirmwareUpdateStatus.FAILED, f"找不到 {sftool_name}，请将其放在程序目录下")
                 return False
 
-            # 检查串口连接
             if not self.serial_assistant:
-                self._set_status(
-                    FirmwareUpdateStatus.FAILED,
-                    "串口助手未初始化"
-                )
+                self._set_status(FirmwareUpdateStatus.FAILED, "串口助手未初始化")
                 return False
 
             if not self.serial_assistant.is_connected:
-                self._set_status(
-                    FirmwareUpdateStatus.FAILED,
-                    "请先连接设备"
-                )
+                self._set_status(FirmwareUpdateStatus.FAILED, "请先连接设备")
                 return False
 
-            # 启动更新线程
-            self._update_thread = threading.Thread(
-                target=self._update_worker,
-                daemon=True
-            )
+            self._update_thread = threading.Thread(target=self._update_worker, daemon=True)
             self._update_thread.start()
             return True
+
+    def _read_stdout_thread(
+        self,
+        process: subprocess.Popen,
+        total_files: int,
+        stop_event: threading.Event
+    ):
+        """
+        在独立线程中读取 sftool 的 stdout 输出
+        """
+        percent_pattern = re.compile(r'^(\d+)%$')
+        
+        # 重置进度追踪器
+        self._progress_tracker.reset(total_files)
+        
+        try:
+            for line in iter(process.stdout.readline, ''):
+                if stop_event.is_set():
+                    break
+                    
+                line = line.strip()
+                if not line:
+                    continue
+                
+                # 记录当前时间戳
+                current_time = time.time()
+                
+                # 尝试匹配百分比
+                match = percent_pattern.match(line)
+                if match:
+                    percent = int(match.group(1))
+                    
+                    # 使用追踪器处理百分比（带时间戳）
+                    should_update, total_progress = self._progress_tracker.process_percent(
+                        percent, current_time
+                    )
+                    
+                    if should_update:
+                        # 映射到 UI 进度范围 (30% - 95%)
+                        ui_progress = 30 + int(total_progress * 65 / 100)
+                        self._set_progress(ui_progress)
+                        
+                        # 更新状态消息，包含总进度百分比
+                        completed = self._progress_tracker.completed_bars
+                        current = self._progress_tracker.current_bar_progress
+                        
+                        if self._progress_tracker.is_in_bar:
+                            # 显示: 正在烧录 (2/6) 文件进度 41% | 总进度 35%
+                            self._set_status(
+                                FirmwareUpdateStatus.FLASHING,
+                                f"正在烧录 ({completed + 1}/{total_files}) 文件:{current}%"
+                            )
+                        elif completed < total_files:
+                            self._set_status(
+                                FirmwareUpdateStatus.FLASHING,
+                                f"正在烧录固件 ({completed + 1}/{total_files})..."
+                            )
+                
+        except Exception:
+            pass
 
     def _update_worker(self) -> None:
         """更新工作线程"""
@@ -433,7 +498,6 @@ class FirmwareUpdater:
             self._set_status(FirmwareUpdateStatus.PREPARING, "准备烧录...")
             self._set_progress(0)
 
-            # 获取当前连接的端口
             if self.serial_assistant and self.serial_assistant.is_connected:
                 port = self.serial_assistant.config.get('port', '')
             
@@ -443,26 +507,23 @@ class FirmwareUpdater:
 
             self._set_progress(10)
 
-            # 暂时禁用自动重连
             auto_reconnect_was_enabled = False
             if self.serial_assistant:
                 auto_reconnect_was_enabled = self.serial_assistant.is_auto_reconnect_enabled()
                 self.serial_assistant.enable_auto_reconnect(False)
 
-            # 断开串口连接
             self._set_status(FirmwareUpdateStatus.PREPARING, "断开设备连接...")
             if self.serial_assistant and self.serial_assistant.is_connected:
                 self.serial_assistant.disconnect()
             
-            # 等待端口释放
             time.sleep(0.5)
             self._set_progress(20)
 
-            # 构建烧录命令
             self._set_status(FirmwareUpdateStatus.FLASHING, "正在烧录固件...")
             cmd = self._build_flash_command(port)
+            
+            total_files = self._get_flash_file_count()
 
-            # 执行烧录命令（静默模式）
             self._set_progress(30)
             
             # Windows 下隐藏控制台窗口
@@ -474,6 +535,7 @@ class FirmwareUpdater:
                 startupinfo.wShowWindow = subprocess.SW_HIDE
                 creationflags = subprocess.CREATE_NO_WINDOW
 
+            # 启动 sftool 进程
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -481,28 +543,38 @@ class FirmwareUpdater:
                 startupinfo=startupinfo,
                 creationflags=creationflags,
                 text=True,
+                bufsize=1,
             )
 
-            # 等待烧录完成，同时更新进度
-            while process.poll() is None:
-                # 模拟进度更新
-                if self._progress < 90:
-                    self._set_progress(self._progress + 2)
-                time.sleep(0.5)
+            # 创建停止事件
+            stop_event = threading.Event()
+            
+            # 启动 stdout 读取线程
+            stdout_thread = threading.Thread(
+                target=self._read_stdout_thread,
+                args=(process, total_files, stop_event),
+                daemon=True
+            )
+            stdout_thread.start()
 
-            stdout, stderr = process.communicate()
+            # 等待进程结束
+            process.wait()
+            
+            # 通知读取线程停止
+            stop_event.set()
+            stdout_thread.join(timeout=2)
+            
+            # 读取 stderr
+            _, stderr = process.communicate()
             
             self._set_progress(95)
 
-            # 检查烧录结果
             if process.returncode != 0:
                 error_msg = stderr.strip() if stderr else "未知错误"
-                # 只显示简短的错误信息
                 if len(error_msg) > 50:
                     error_msg = "烧录过程中出错"
                 self._set_status(FirmwareUpdateStatus.FAILED, f"烧录失败: {error_msg}")
                 
-                # 恢复自动重连
                 if self.serial_assistant and auto_reconnect_was_enabled:
                     self.serial_assistant.enable_auto_reconnect(True)
                 return
@@ -510,11 +582,9 @@ class FirmwareUpdater:
             self._set_progress(100)
             self._set_status(FirmwareUpdateStatus.SUCCESS, "固件烧录完成！")
 
-            # 等待 1 秒后重连
             self._set_status(FirmwareUpdateStatus.RECONNECTING, "正在重新连接设备...")
             time.sleep(1.0)
 
-            # 恢复串口连接
             if self.serial_assistant:
                 self.serial_assistant.configure(
                     port=port,
@@ -524,7 +594,6 @@ class FirmwareUpdater:
                     parity='N'
                 )
                 
-                # 尝试重连
                 reconnect_attempts = 0
                 max_attempts = 5
                 
@@ -544,7 +613,6 @@ class FirmwareUpdater:
                         "固件更新完成，请手动重新连接设备"
                     )
                 
-                # 恢复自动重连设置
                 if auto_reconnect_was_enabled:
                     self.serial_assistant.enable_auto_reconnect(True)
 
@@ -553,28 +621,21 @@ class FirmwareUpdater:
         except Exception as e:
             self._set_status(FirmwareUpdateStatus.FAILED, f"更新失败: {str(e)}")
         finally:
-            # 清理临时文件
             self._cleanup_temp()
 
     def cancel(self) -> None:
-        """取消操作并清理"""
         self._cleanup_temp()
         self._set_status(FirmwareUpdateStatus.IDLE, "")
         self._set_progress(0)
 
     def get_status_display(self) -> tuple[str, str]:
-        """获取用于显示的状态信息
-
-        Returns:
-            (状态文本, 颜色类型: "good"/"warn"/"bad"/"neutral")
-        """
         status_map: dict[FirmwareUpdateStatus, tuple[str, str]] = {
             FirmwareUpdateStatus.IDLE: ("等待选择固件文件", "neutral"),
             FirmwareUpdateStatus.VALIDATING: ("正在验证...", "neutral"),
             FirmwareUpdateStatus.VALID: ("✓ 固件文件有效，可以开始更新", "good"),
             FirmwareUpdateStatus.INVALID: (f"✗ {self._status_message}", "bad"),
             FirmwareUpdateStatus.PREPARING: ("准备中...", "neutral"),
-            FirmwareUpdateStatus.FLASHING: ("正在烧录固件...", "warn"),
+            FirmwareUpdateStatus.FLASHING: (self._status_message or "正在烧录固件...", "warn"),
             FirmwareUpdateStatus.SUCCESS: (f"✓ {self._status_message}", "good"),
             FirmwareUpdateStatus.FAILED: (f"✗ {self._status_message}", "bad"),
             FirmwareUpdateStatus.RECONNECTING: ("正在重新连接...", "neutral"),
@@ -591,7 +652,6 @@ _firmware_updater: FirmwareUpdater | None = None
 
 
 def get_firmware_updater() -> FirmwareUpdater:
-    """获取全局固件更新器实例"""
     global _firmware_updater
     if _firmware_updater is None:
         _firmware_updater = FirmwareUpdater()
@@ -599,7 +659,6 @@ def get_firmware_updater() -> FirmwareUpdater:
 
 
 def set_firmware_updater_serial(serial_assistant: SerialAssistant) -> None:
-    """设置固件更新器的串口助手"""
     updater = get_firmware_updater()
     updater.set_serial_assistant(serial_assistant)
 
@@ -609,95 +668,72 @@ def set_firmware_updater_serial(serial_assistant: SerialAssistant) -> None:
 # ============================================================================
 
 class FirmwareVersionChecker:
-    """固件版本检测器 - 用于查询设备固件版本"""
+    """固件版本检测器"""
 
-    # 版本响应的正则匹配: FW_VERSION:release1.1.2 或 FW_VERSION:dev1.0.0
     VERSION_PATTERN: re.Pattern[str] = re.compile(
         r'FW_VERSION:(release|dev)(\d+)\.(\d+)\.(\d+)'
     )
 
     def __init__(self, serial_assistant: SerialAssistant | None = None) -> None:
-        """初始化版本检测器"""
         self.serial_assistant: SerialAssistant | None = serial_assistant
-        self._version_string: str = ""  # 格式化后的版本字符串
-        self._raw_version: str = ""     # 原始版本信息
+        self._version_string: str = ""
+        self._raw_version: str = ""
         self._check_lock: threading.Lock = threading.Lock()
         self._response_event: threading.Event = threading.Event()
         self._response_buffer: str = ""
-
-        # 版本检测完成回调
         self.on_version_checked: Callable[[str], None] | None = None
 
     @property
     def version_string(self) -> str:
-        """获取格式化的版本字符串"""
         return self._version_string
 
     def set_serial_assistant(self, serial_assistant: SerialAssistant) -> None:
-        """设置串口助手"""
         self.serial_assistant = serial_assistant
 
     def _format_version(self, version_type: str, major: str, minor: str, patch: str) -> str:
-        """格式化版本字符串为 'release v1.1.2' 或 'dev v1.0.0' 格式"""
         return f"{version_type} v{major}.{minor}.{patch}"
 
     def check_version_async(self) -> None:
-        """异步检测固件版本（在后台线程执行）"""
         thread = threading.Thread(target=self._check_version_worker, daemon=True)
         thread.start()
 
     def _check_version_worker(self) -> None:
-        """版本检测工作线程"""
         with self._check_lock:
             version = self._do_check_version()
             self._version_string = version
 
-            # 触发回调
             if self.on_version_checked:
                 with contextlib.suppress(Exception):
                     self.on_version_checked(version)
 
     def _do_check_version(self) -> str:
-        """执行版本检测，返回版本字符串或"未知" """
         if not self.serial_assistant or not self.serial_assistant.is_connected:
             return "未知"
 
         try:
-            # 清空接收缓冲区
             self.serial_assistant.clear_rx_buffer()
             self._response_buffer = ""
             self._response_event.clear()
 
-            # 保存原有的数据接收回调
             original_callback = self.serial_assistant.on_data_received
 
-            # 设置临时回调来捕获响应
             def capture_response(data: bytes) -> None:
                 try:
                     text = data.decode('utf-8', errors='ignore')
                     self._response_buffer += text
-                    # 检查是否包含版本信息
                     if 'FW_VERSION:' in self._response_buffer:
                         self._response_event.set()
                 except Exception:
                     pass
-                # 调用原有回调
                 if original_callback:
                     original_callback(data)
 
             self.serial_assistant.on_data_received = capture_response
-
-            # 发送版本查询命令
             self.serial_assistant.send_data("sys_get version\n")
-
-            # 等待响应（最多500ms）
             got_response = self._response_event.wait(timeout=0.5)
-
-            # 恢复原有回调
             self.serial_assistant.on_data_received = original_callback
 
             if got_response:
-                # 解析版本信息
                 match = self.VERSION_PATTERN.search(self._response_buffer)
                 if match:
                     version_type = match.group(1)
@@ -712,12 +748,10 @@ class FirmwareVersionChecker:
             return "未知"
 
 
-# 全局版本检测器实例
 _version_checker: FirmwareVersionChecker | None = None
 
 
 def get_version_checker() -> FirmwareVersionChecker:
-    """获取全局版本检测器实例"""
     global _version_checker
     if _version_checker is None:
         _version_checker = FirmwareVersionChecker()
@@ -725,6 +759,5 @@ def get_version_checker() -> FirmwareVersionChecker:
 
 
 def set_version_checker_serial(serial_assistant: SerialAssistant) -> None:
-    """设置版本检测器的串口助手"""
     checker = get_version_checker()
     checker.set_serial_assistant(serial_assistant)
