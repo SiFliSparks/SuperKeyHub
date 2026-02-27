@@ -26,7 +26,7 @@ from pathlib import Path
 # 配置
 # ============================================================================
 APP_NAME: str = "SuperKeyHUB"
-APP_VERSION: str = "1.7.5"
+APP_VERSION: str = "1.7.6"
 APP_AUTHOR: str = "SuperKey Team"
 APP_DESCRIPTION: str = "SuperKey Hardware Monitor"
 
