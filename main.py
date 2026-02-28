@@ -41,6 +41,7 @@ from led_controller import (
     LED_EFFECT_NAMES,
     get_led_controller,
 )
+from power_monitor import PowerMonitor
 from firmware_updater import (
     FirmwareUpdater,
     FirmwareUpdateStatus,
@@ -153,7 +154,7 @@ if IS_WINDOWS:
 # ============================================================================
 # Version Configuration
 # ============================================================================
-APP_VERSION: str = "1.7.6"
+APP_VERSION: str = "1.7.5"
 FIRMWARE_COMPAT: str = "1.2"
 APP_NAME: str = "SuperKeyHUB"
 # ============================================================================
@@ -611,6 +612,11 @@ async def main(page: ft.Page) -> None:
         hardware_monitor=hw_monitor
     )
 
+    # ==================== 电源监控初始化 ====================
+    power_monitor: PowerMonitor = PowerMonitor(serial_assistant)
+    power_monitor.set_enabled(config_mgr.is_sleep_with_pc_enabled())
+    power_monitor.start()
+
     # ==================== 系统托盘初始化 ====================
     system_tray: SystemTray | None = None
     app_state: dict[str, bool] = {"force_quit": False}
@@ -626,6 +632,9 @@ async def main(page: ft.Page) -> None:
     def cleanup_and_exit() -> None:
         """清理资源（快速版本）"""
         import contextlib
+        # 停止电源监控
+        with contextlib.suppress(BaseException):
+            power_monitor.stop()
         # 设置停止标志，让线程自行退出
         with contextlib.suppress(BaseException):
             finsh_sender.enabled = False
@@ -1757,6 +1766,23 @@ async def main(page: ft.Page) -> None:
         on_change=on_auto_start_changed
     )
 
+    def on_sleep_with_pc_changed(e: ft.ControlEvent) -> None:
+        enabled: bool = e.control.value
+        config_mgr.set_sleep_with_pc(enabled)
+        power_monitor.set_enabled(enabled)
+
+    sleep_with_pc_switch: ft.Switch = ft.Switch(
+        label="随电脑休眠",
+        value=config_mgr.is_sleep_with_pc_enabled(),
+        scale=0.8,
+        label_style=ft.TextStyle(
+            size=16,
+            color=theme.get("TEXT_SECONDARY"),
+        ),
+        on_change=on_sleep_with_pc_changed,
+        disabled=(platform.system() != "Windows")
+    )
+
     app_settings_card: ft.Card = ft.Card(ft.Container(
         content=ft.Column([
             ft.Row([
@@ -1771,9 +1797,10 @@ async def main(page: ft.Page) -> None:
             ], spacing=8),
             minimize_to_tray_switch,
             auto_start_switch,
+            sleep_with_pc_switch,
         ], spacing=8),
         padding=16,
-        height=140,
+        height=170,
         bgcolor=theme.get("CARD_BG_ALPHA"),
         border_radius=10
     ))

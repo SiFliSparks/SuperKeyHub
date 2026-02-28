@@ -167,6 +167,15 @@ class ConfigManager:
         self._config.setdefault("app", {})["auto_start"] = value
         self.save()
 
+    def is_sleep_with_pc_enabled(self) -> bool:
+        """是否随PC休眠"""
+        return self._config.get("app", {}).get("sleep_with_pc", False)
+
+    def set_sleep_with_pc(self, value: bool) -> None:
+        """设置随PC休眠"""
+        self._config.setdefault("app", {})["sleep_with_pc"] = value
+        self.save()
+
     # ===== 硬件配置 =====
 
     def get_gpu_index(self) -> int:
