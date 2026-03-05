@@ -154,8 +154,8 @@ if IS_WINDOWS:
 # ============================================================================
 # Version Configuration
 # ============================================================================
-APP_VERSION: str = "1.7.5"
-FIRMWARE_COMPAT: str = "1.2"
+APP_VERSION: str = "1.8.0"
+FIRMWARE_COMPAT: str = "1.4"
 APP_NAME: str = "SuperKeyHUB"
 # ============================================================================
 
@@ -524,7 +524,7 @@ async def main(page: ft.Page) -> None:
 
     page.window.width = 1024           # 固定宽度
     page.window.height = 640           # 固定高度
-
+    page.window.center()
     page.window.shadow = True
     page.padding = 0
     page.spacing = 0
@@ -2285,47 +2285,28 @@ async def main(page: ft.Page) -> None:
                 color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
             ft.Text(
-                "制作团队",
+                "更新日志",
                 size=16,
                 weight=ft.FontWeight.BOLD,
                 color=theme.get("TEXT_SECONDARY")),
             ft.Text(
-                "• 解博文 xiebowen1@outlook.com",
+                "• 新增：跟随系统休眠",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 蔡松 19914553473@163.com",
+                "• 新增：支持 0°/90°/180°/270° 四档旋转",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 郭雨十 2361768748@qq.com",
+                "• 优化：包括CPU 频率在内的性能数据采集优化",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 思澈科技（南京）提供技术支持",
-                size=12,
-                color=theme.get("TEXT_TERTIARY")),
-            ft.Container(height=20),
-            ft.Text(
-                "更新日志 2025年12月9日",
-                size=16,
-                weight=ft.FontWeight.BOLD,
-                color=theme.get("TEXT_SECONDARY")),
-            ft.Text(
-                "• 修复：天气信息自动更新，APP自动获取权限",
+                "• 优化：对设置页面重新布局以提升使用体验",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 新增：开机自启，自动检测与连接，配置保存，"
-                "后台运行，自定义按键配置",
-                size=12,
-                color=theme.get("TEXT_TERTIARY")),
-            ft.Text(
-                "• 删除：复杂的串口配置页面和数据下发间隔配置",
-                size=12,
-                color=theme.get("TEXT_TERTIARY")),
-            ft.Text(
-                "• 本次更新与旧版本固件部分兼容",
+                "• 本次所有新增功能均需配合固件 v1.4 版本使用，更多详情请查看文档",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
@@ -2338,6 +2319,21 @@ async def main(page: ft.Page) -> None:
                 "• Apache-2.0",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
+            ft.TextButton(
+                "点此查看更新内容",
+                url="https://sparks.sifli.com/projects/superkey/custom/newlab.html",
+                style=ft.ButtonStyle(padding=0),
+            ),
+            ft.TextButton(
+                "GitHub仓库（上位机）",
+                url="https://github.com/SiFliSparks/SuperKeyHub",
+                style=ft.ButtonStyle(padding=0),
+            ),
+            ft.TextButton(
+                "GitHub仓库（固件）",
+                url="https://github.com/SiFliSparks/SuperKey",
+                style=ft.ButtonStyle(padding=0),
+            ),
         ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.START),
         padding=20,
         expand=True
