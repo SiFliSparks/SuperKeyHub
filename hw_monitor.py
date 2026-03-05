@@ -47,16 +47,140 @@ if IS_WINDOWS:
     wmi_module = _try_import("wmi")
 
 
-def is_admin() -> bool:
-    """检查是否有管理员权限"""
-    if IS_WINDOWS:
+# =============================================================================
+# Windows PDH Performance Counter (CPU frequency & usage)
+# =============================================================================
+
+class WindowsPDH:
+    """Read CPU frequency and usage from Windows PDH counters.
+    Same data source as Task Manager. No admin required, no DLLs needed.
+    """
+
+    def __init__(self) -> None:
+        self._available: bool = False
+        self._hQuery = None
+        self._hPerfCounter = None
+        self._hUtilCounter = None
+        self._base_freq_mhz: int | None = None
+        self._cpu_name: str | None = None
+        self._pdh = None
+
+        if not IS_WINDOWS:
+            return
+
         try:
-            import ctypes
-            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+            self._pdh = ctypes.windll.pdh
+            self._base_freq_mhz = self._read_base_freq()
+            self._cpu_name = self._read_cpu_name()
+            self._init_counters()
         except Exception:
-            return False
-    else:
-        return os.geteuid() == 0 if hasattr(os, 'geteuid') else False
+            self._available = False
+
+    def _read_base_freq(self) -> int | None:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+            )
+            mhz, _ = winreg.QueryValueEx(key, "~MHz")
+            winreg.CloseKey(key)
+            return int(mhz)
+        except Exception:
+            return None
+
+    def _read_cpu_name(self) -> str | None:
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"
+            )
+            name, _ = winreg.QueryValueEx(key, "ProcessorNameString")
+            winreg.CloseKey(key)
+            return name.strip()
+        except Exception:
+            return None
+
+    def _init_counters(self) -> None:
+        from ctypes import wintypes
+
+        hQuery = wintypes.HANDLE()
+        if self._pdh.PdhOpenQueryW(None, 0, ctypes.byref(hQuery)) != 0:
+            return
+
+        hPerf = wintypes.HANDLE()
+        hUtil = wintypes.HANDLE()
+
+        perf_ok = self._pdh.PdhAddEnglishCounterW(
+            hQuery,
+            r"\Processor Information(_Total)\% Processor Performance",
+            0, ctypes.byref(hPerf)
+        ) == 0
+
+        util_ok = self._pdh.PdhAddEnglishCounterW(
+            hQuery,
+            r"\Processor Information(_Total)\% Processor Time",
+            0, ctypes.byref(hUtil)
+        ) == 0
+
+        if not (perf_ok or util_ok):
+            self._pdh.PdhCloseQuery(hQuery)
+            return
+
+        # First collect (baseline for rate counters)
+        self._pdh.PdhCollectQueryData(hQuery)
+
+        self._hQuery = hQuery
+        self._hPerfCounter = hPerf if perf_ok else None
+        self._hUtilCounter = hUtil if util_ok else None
+        self._available = True
+
+    def _get_counter_value(self, hCounter) -> float | None:
+        if hCounter is None:
+            return None
+
+        class PDH_FMT_COUNTERVALUE(ctypes.Structure):
+            _fields_ = [("CStatus", ctypes.c_ulong), ("doubleValue", ctypes.c_double)]
+
+        value = PDH_FMT_COUNTERVALUE()
+        counter_type = ctypes.c_ulong()
+        status = self._pdh.PdhGetFormattedCounterValue(
+            hCounter, 0x00000200,  # PDH_FMT_DOUBLE
+            ctypes.byref(counter_type), ctypes.byref(value)
+        )
+        if status == 0 and value.CStatus == 0:
+            return value.doubleValue
+        return None
+
+    def collect(self) -> None:
+        """Call once per update cycle to refresh all counters."""
+        if self._available and self._hQuery:
+            self._pdh.PdhCollectQueryData(self._hQuery)
+
+    @property
+    def available(self) -> bool:
+        return self._available
+
+    @property
+    def cpu_name(self) -> str | None:
+        return self._cpu_name
+
+    @property
+    def base_freq_mhz(self) -> int | None:
+        return self._base_freq_mhz
+
+    def get_cpu_clock(self) -> float | None:
+        """CPU actual frequency in MHz (base_freq * performance%)."""
+        perf_pct = self._get_counter_value(self._hPerfCounter)
+        if perf_pct is not None and self._base_freq_mhz:
+            return self._base_freq_mhz * perf_pct / 100.0
+        return None
+
+    def get_cpu_usage(self) -> float | None:
+        """CPU usage % (same as Task Manager)."""
+        return self._get_counter_value(self._hUtilCounter)
+
 
 
 # =============================================================================
@@ -303,25 +427,6 @@ class OptimizedLHM:
         # 如果都没找到，尝试获取任意一个功耗传感器
         return self._sensor_mapper.get_sensor('Cpu', None, 'Power')
 
-    def get_cpu_clock(self) -> float | None:
-        if not self._available:
-            return None
-        clocks = self._sensor_mapper.get_all_sensors_of_type('Cpu', 'Clock')
-        core_clocks = [c[2] for c in clocks if 'Core' in c[1]]
-        return sum(core_clocks) / len(core_clocks) if core_clocks else None
-
-    def get_cpu_load(self) -> float | None:
-        if not self._available:
-            return None
-        # 尝试常见的CPU负载传感器名称
-        load_sensor_names = ['CPU Total', 'Total', 'CPU Core']
-        for name in load_sensor_names:
-            val = self._sensor_mapper.get_sensor('Cpu', None, 'Load', name)
-            if val is not None:
-                return val
-        # 回退：获取任意一个负载传感器
-        return self._sensor_mapper.get_sensor('Cpu', None, 'Load')
-
     def get_gpu_temp(self, idx: int = 0) -> float | None:
         if not self._available or idx >= len(self._gpu_names):
             return None
@@ -407,36 +512,23 @@ class OptimizedLHM:
                 'GpuIntel', self._gpu_names[idx], 'SmallData', 'D3D Shared Memory Total')
         return int(val * 1024 * 1024) if val else None
 
-    def get_memory_load(self) -> float | None:
-        if not self._available:
-            return None
-        return self._sensor_mapper.get_sensor('Memory', None, 'Load')
-
     def get_memory_clock(self) -> float | None:
-        """获取内存频率 (MHz)"""
-        # 首先尝试从 LHM 获取
+        """获取内存频率 (MHz). LHM first, WMI fallback."""
         if self._available:
             freq = self._sensor_mapper.get_sensor('Memory', None, 'Clock')
             if freq is not None:
                 return freq
-        
-        # 后备：使用 WMI 获取
-        return self._get_memory_clock_wmi()
-
-    def _get_memory_clock_wmi(self) -> float | None:
-        """通过 WMI 获取内存频率"""
-        if wmi_module is None:
-            return None
-        try:
-            w = wmi_module.WMI()
-            speeds: list[int] = []
-            for mem in w.Win32_PhysicalMemory():
-                if mem.Speed:
-                    speeds.append(int(mem.Speed))
-            if speeds:
-                return float(max(speeds))  # 返回最高频率 (MT/s)
-        except Exception:
-            pass
+        # Fallback: WMI ConfiguredClockSpeed = actual running freq (incl. XMP/EXPO)
+        if wmi_module is not None:
+            try:
+                w = wmi_module.WMI()
+                speeds = [int(m.ConfiguredClockSpeed)
+                          for m in w.Win32_PhysicalMemory()
+                          if m.ConfiguredClockSpeed]
+                if speeds:
+                    return float(max(speeds))
+            except Exception:
+                pass
         return None
 
     def get_gpu_names(self) -> list[str]:
@@ -446,14 +538,12 @@ class OptimizedLHM:
         return self._cpu_names.copy()
 
     def get_cpu_info(self) -> dict[str, Any]:
-        """获取CPU信息"""
+        """CPU info from LHM (temp + power only, freq/usage come from PDH)."""
         name = self._cpu_names[0] if self._cpu_names else "Unknown CPU"
         return {
             "name": name,
-            "usage": self.get_cpu_load(),
             "temp": self.get_cpu_temp(),
             "power": self.get_cpu_power(),
-            "clock_mhz": self.get_cpu_clock()
         }
 
     def get_gpu_info(self, idx: int = 0) -> dict[str, Any]:
@@ -473,16 +563,7 @@ class OptimizedLHM:
         """获取GPU列表"""
         return self._gpu_names.copy()
 
-    def get_memory_info(self) -> dict[str, Any]:
-        """获取内存信息"""
-        mem = psutil.virtual_memory()
-        freq_mhz = self.get_memory_clock() if self._available else None
-        return {
-            "used_b": mem.used,
-            "total_b": mem.total,
-            "percent": mem.percent,
-            "freq_mhz": freq_mhz
-        }
+
 
 
 # =============================================================================
@@ -1466,20 +1547,14 @@ class HardwareMonitor:
     """统一的跨平台硬件监控器"""
 
     def __init__(self, lazy_init: bool = False) -> None:
-        """初始化硬件监控器
-
-        Args:
-            lazy_init: 如果为True，则延迟初始化平台监控器（用于异步启动）
-        """
         self.disks: CachedDisks = CachedDisks()
         self.network: CachedNetwork = CachedNetwork()
 
-        self._cpu_percent_cache: float | None = None
-        self._cpu_percent_cache_time: float = 0
         self._initialized: bool = False
         self._init_lock: threading.Lock = threading.Lock()
 
-        # 根据平台初始化不同的监控器
+        # Windows: PDH (CPU freq/usage) + LHM (temp/power/GPU)
+        self._pdh: WindowsPDH | None = None
         self.lhm: OptimizedLHM | None = None
         self._platform_monitor: (
             Union[MacOSHardwareMonitor, LinuxHardwareMonitor] | None
@@ -1489,44 +1564,37 @@ class HardwareMonitor:
             self._do_init()
 
     def _do_init(self) -> None:
-        """执行实际的初始化（可在后台线程调用）"""
         with self._init_lock:
             if self._initialized:
                 return
 
             if IS_WINDOWS:
+                self._pdh = WindowsPDH()
                 self.lhm = OptimizedLHM()
-                self._platform_monitor = None
             elif IS_MACOS:
-                self.lhm = None
                 self._platform_monitor = MacOSHardwareMonitor()
             elif IS_LINUX:
-                self.lhm = None
                 self._platform_monitor = LinuxHardwareMonitor()
 
-            # 初始化 psutil CPU 百分比（首次调用返回0）
-            with contextlib.suppress(Exception):
-                psutil.cpu_percent(interval=None)
+            if not IS_WINDOWS:
+                with contextlib.suppress(Exception):
+                    psutil.cpu_percent(interval=None)
 
             self._initialized = True
 
     def ensure_initialized(self) -> None:
-        """确保已初始化（阻塞直到完成）"""
         if not self._initialized:
             self._do_init()
 
     def is_initialized(self) -> bool:
-        """检查是否已完成初始化"""
         return self._initialized
 
     def is_lhm_loaded(self) -> bool:
-        """检查LHM是否加载 (仅Windows)"""
         if IS_WINDOWS and self.lhm:
             return self.lhm.available
         return False
 
     def get_platform_name(self) -> str:
-        """获取当前平台名称"""
         if IS_WINDOWS:
             return f"Windows {platform.release()}"
         elif IS_MACOS:
@@ -1543,51 +1611,45 @@ class HardwareMonitor:
         return "Unknown"
 
     def get_cpu_name(self) -> str:
-        cpu_info = self.get_cpu_data()
-        return cpu_info.get("name", "CPU")
+        return self.get_cpu_data().get("name", "CPU")
 
     def get_cpu_data(self) -> dict[str, Any]:
-        # Windows: 使用LHM
-        if IS_WINDOWS and self.lhm:
-            cpu_info = self.lhm.get_cpu_info()
+        if IS_WINDOWS:
+            # PDH: frequency + usage (accurate, same as Task Manager)
+            # LHM: temperature + power (needs Ring0 driver)
+            pdh = self._pdh
+            if pdh and pdh.available:
+                pdh.collect()
 
-            # 如果LHM没有使用率，使用psutil
-            if cpu_info.get("usage") is None:
-                current_time = time.time()
-                if (self._cpu_percent_cache is None or
-                        current_time - self._cpu_percent_cache_time > 1.0):
-                    try:
-                        self._cpu_percent_cache = psutil.cpu_percent(interval=None)
-                        self._cpu_percent_cache_time = current_time
-                    except Exception:
-                        pass
-                cpu_info["usage"] = self._cpu_percent_cache
+            # CPU name: prefer LHM (full name), fallback to PDH (registry)
+            cpu_name = (pdh.cpu_name if pdh else None) or "Unknown CPU"
+            if self.lhm and self.lhm.available:
+                lhm_names = self.lhm.get_cpu_names()
+                if lhm_names:
+                    cpu_name = lhm_names[0]
 
-            return cpu_info
+            lhm_info = self.lhm.get_cpu_info() if self.lhm else {}
 
-        # macOS/Linux: 使用平台特定监控器
+            return {
+                "name": cpu_name,
+                "usage": pdh.get_cpu_usage() if pdh and pdh.available else None,
+                "temp": lhm_info.get("temp"),
+                "power": lhm_info.get("power"),
+                "clock_mhz": pdh.get_cpu_clock() if pdh and pdh.available else None,
+            }
         elif self._platform_monitor:
             return self._platform_monitor.get_cpu_info()
-
-        # 后备: 基本psutil
-        freq = psutil.cpu_freq()
-        return {
-            "name": "CPU",
-            "usage": psutil.cpu_percent(interval=None),
-            "temp": None,
-            "power": None,
-            "clock_mhz": freq.current if freq else None
-        }
+        return {"name": "CPU", "usage": None, "temp": None,
+                "power": None, "clock_mhz": None}
 
     def get_gpu_data(self, gpu_index: int = 0) -> dict[str, Any]:
         if IS_WINDOWS and self.lhm:
             return self.lhm.get_gpu_info(gpu_index)
         elif self._platform_monitor:
             return self._platform_monitor.get_gpu_info(gpu_index)
-        return {
-            "name": "GPU", "util": None, "temp": None, "clock_mhz": None,
-            "mem_used_b": None, "mem_total_b": None, "power": None
-        }
+        return {"name": "GPU", "util": None, "temp": None,
+                "clock_mhz": None, "mem_used_b": None,
+                "mem_total_b": None, "power": None}
 
     @property
     def gpu_names(self) -> list[str]:
@@ -1595,21 +1657,25 @@ class HardwareMonitor:
             return self.lhm.get_gpu_names()
         elif self._platform_monitor:
             return self._platform_monitor.get_gpu_list()
-        return ["未检测到GPU"]
+        return []
 
     def get_memory_data(self) -> dict[str, Any]:
-        if IS_WINDOWS and self.lhm:
-            return self.lhm.get_memory_info()
+        if IS_WINDOWS:
+            # psutil for capacity/usage, LHM for frequency only
+            mem = psutil.virtual_memory()
+            freq_mhz = None
+            if self.lhm and self.lhm.available:
+                freq_mhz = self.lhm.get_memory_clock()
+            return {
+                "used_b": mem.used,
+                "total_b": mem.total,
+                "percent": mem.percent,
+                "freq_mhz": freq_mhz,
+            }
         elif self._platform_monitor:
             return self._platform_monitor.get_memory_info()
-
-        mem = psutil.virtual_memory()
-        return {
-            "used_b": mem.used,
-            "total_b": mem.total,
-            "percent": mem.percent,
-            "freq_mhz": None
-        }
+        return {"used_b": None, "total_b": None,
+                "percent": None, "freq_mhz": None}
 
     def get_disk_data(self) -> list[dict[str, Any]]:
         return self.disks.get_disk_data()
@@ -1707,96 +1773,3 @@ def watt_str(v: float | None) -> str:
 
 
 # Windows 专用类 (如果在 Windows 上)
-if IS_WINDOWS:
-    class WindowsHardwareMonitor:
-        """Windows 硬件监控实现"""
-
-        def __init__(self) -> None:
-            self._lhm: OptimizedLHM = OptimizedLHM()
-            self._cpu_name: str | None = None
-            self._init_cpu_name()
-
-        def _init_cpu_name(self) -> None:
-            if self._lhm.available:
-                names = self._lhm.get_cpu_names()
-                if names:
-                    self._cpu_name = names[0]
-
-            if not self._cpu_name:
-                try:
-                    import winreg
-                    key = winreg.OpenKey(
-                        winreg.HKEY_LOCAL_MACHINE,
-                        r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
-                    self._cpu_name, _ = winreg.QueryValueEx(
-                        key, "ProcessorNameString")
-                    winreg.CloseKey(key)
-                except Exception:
-                    self._cpu_name = "Unknown CPU"
-
-        def get_cpu_info(self) -> dict[str, Any]:
-            usage: float | None = None
-            temp: float | None = None
-            power: float | None = None
-            clock_mhz: float | None = None
-
-            if self._lhm.available:
-                usage = self._lhm.get_cpu_load()
-                temp = self._lhm.get_cpu_temp()
-                power = self._lhm.get_cpu_power()
-                clock_mhz = self._lhm.get_cpu_clock()
-
-            if usage is None:
-                usage = psutil.cpu_percent()
-
-            if clock_mhz is None:
-                freq = psutil.cpu_freq()
-                clock_mhz = freq.current if freq else None
-
-            return {
-                "name": self._cpu_name,
-                "usage": usage,
-                "temp": temp,
-                "power": power,
-                "clock_mhz": clock_mhz
-            }
-
-        def get_gpu_list(self) -> list[str]:
-            if self._lhm.available:
-                return self._lhm.get_gpu_names()
-            return []
-
-        def get_gpu_info(self, gpu_index: int = 0) -> dict[str, Any]:
-            if self._lhm.available:
-                names = self._lhm.get_gpu_names()
-                name = names[gpu_index] if gpu_index < len(names) else "Unknown"
-                return {
-                    "name": name,
-                    "util": self._lhm.get_gpu_load(gpu_index),
-                    "temp": self._lhm.get_gpu_temp(gpu_index),
-                    "clock_mhz": self._lhm.get_gpu_clock(gpu_index),
-                    "mem_used_b": self._lhm.get_gpu_mem_used(gpu_index),
-                    "mem_total_b": self._lhm.get_gpu_mem_total(gpu_index),
-                    "power": self._lhm.get_gpu_power(gpu_index)
-                }
-            return {
-                "name": "Unknown",
-                "util": None,
-                "temp": None,
-                "clock_mhz": None,
-                "mem_used_b": None,
-                "mem_total_b": None,
-                "power": None
-            }
-
-        def get_memory_info(self) -> dict[str, Any]:
-            mem = psutil.virtual_memory()
-            freq_mhz = None
-            if self._lhm.available:
-                freq_mhz = self._lhm.get_memory_clock()
-            return {
-                "used_b": mem.used,
-                "total_b": mem.total,
-                "percent": mem.percent,
-                "freq_mhz": freq_mhz
-            }

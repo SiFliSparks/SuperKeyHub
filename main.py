@@ -1548,6 +1548,21 @@ async def main(page: ft.Page) -> None:
 
         threading.Thread(target=delayed_check, daemon=True).start()
 
+    def sync_lcd_rotation() -> None:
+        """连接后同步屏幕旋转设置到设备"""
+        degree = config_mgr.get_lcd_rotation()
+        if degree != 0 and serial_assistant and serial_assistant.is_connected:
+            try:
+                import time
+                time.sleep(1)
+                serial_assistant.send_data(
+                    f"sys_set lcd_rotation {degree}\r\n")
+            except Exception:
+                pass
+
+    def _sync_lcd_rotation_async() -> None:
+        threading.Thread(target=sync_lcd_rotation, daemon=True).start()
+
     def update_device_status_indicator(connected: bool) -> None:
         """更新标题栏的设备连接状态"""
         device_status_indicator.visible = connected
@@ -1581,6 +1596,7 @@ async def main(page: ft.Page) -> None:
 
             # 触发固件版本检测
             trigger_version_check()
+            _sync_lcd_rotation_async()
             update_device_status_indicator(True)
         else:
             port_dropdown.disabled = False
@@ -1610,6 +1626,7 @@ async def main(page: ft.Page) -> None:
 
             # 触发固件版本检测
             trigger_version_check()
+            _sync_lcd_rotation_async()
             update_device_status_indicator(True)
         else:
             # 连接断开
@@ -1654,6 +1671,7 @@ async def main(page: ft.Page) -> None:
             config_mgr.set_last_port(port)
             # 手动连接成功，触发版本检测
             trigger_version_check()
+            _sync_lcd_rotation_async()
             update_device_status_indicator(True)
         else:
             port_status_text.value = "连接失败"
@@ -1730,6 +1748,7 @@ async def main(page: ft.Page) -> None:
                     finsh_sender.start()
                     # 启动时连接成功，触发版本检测
                     trigger_version_check()
+                    _sync_lcd_rotation_async()
 
     def on_minimize_to_tray_changed(e: ft.ControlEvent) -> None:
         config_mgr.set_minimize_to_tray(e.control.value)
@@ -1766,6 +1785,30 @@ async def main(page: ft.Page) -> None:
         on_change=on_auto_start_changed
     )
 
+    def on_lcd_rotation_changed(e: ft.ControlEvent) -> None:
+        degree = int(e.control.value)
+        config_mgr.set_lcd_rotation(degree)
+        if serial_assistant and serial_assistant.is_connected:
+            try:
+                serial_assistant.send_data(
+                    f"sys_set lcd_rotation {degree}\r\n")
+            except Exception:
+                pass
+
+    lcd_rotation_dropdown: ft.Dropdown = ft.Dropdown(
+        label="屏幕旋转",
+        options=[
+            ft.dropdown.Option(key="0", text="0° (默认)"),
+            ft.dropdown.Option(key="90", text="90°"),
+            ft.dropdown.Option(key="180", text="180°"),
+            ft.dropdown.Option(key="270", text="270°"),
+        ],
+        value=str(config_mgr.get_lcd_rotation()),
+        width=160,
+        text_size=14,
+        on_change=on_lcd_rotation_changed,
+    )
+
     def on_sleep_with_pc_changed(e: ft.ControlEvent) -> None:
         enabled: bool = e.control.value
         config_mgr.set_sleep_with_pc(enabled)
@@ -1798,9 +1841,9 @@ async def main(page: ft.Page) -> None:
             minimize_to_tray_switch,
             auto_start_switch,
             sleep_with_pc_switch,
+            lcd_rotation_dropdown,
         ], spacing=8),
         padding=16,
-        height=170,
         bgcolor=theme.get("CARD_BG_ALPHA"),
         border_radius=10
     ))

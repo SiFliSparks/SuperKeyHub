@@ -59,7 +59,6 @@ FIRMWARE_FILES: list[FirmwareFile] = [
     FirmwareFile("ER_IROM1.bin", "0x12218000", required=True),
     FirmwareFile("ER_IROM2.bin", "0x12660000", required=True),
     FirmwareFile("ER_IROM3.bin", "0x12460000", required=True),
-    FirmwareFile("dfu_pan.bin", "0x12008000", required=True),
     FirmwareFile("ftab.bin", "0x12000000", required=True),
 ]
 

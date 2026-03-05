@@ -56,10 +56,12 @@ class ConfigManager:
             },
             "hardware": {
                 "gpu_index": 0,  # 选择的GPU索引
+                "lcd_rotation": 0,  # 屏幕旋转角度: 0, 90, 180, 270
             },
             "app": {
                 "minimize_to_tray": True,  # 关闭时最小化到托盘
                 "auto_start": False,  # 开机自启动
+                "sleep_with_pc": False,  # 随PC休眠
             },
         }
 
@@ -186,6 +188,16 @@ class ConfigManager:
         """设置选择的GPU索引"""
         self._config.setdefault("hardware", {})["gpu_index"] = max(0, index)
         self.save()
+
+    def get_lcd_rotation(self) -> int:
+        """获取屏幕旋转角度"""
+        return self._config.get("hardware", {}).get("lcd_rotation", 0)
+
+    def set_lcd_rotation(self, degree: int) -> None:
+        """设置屏幕旋转角度 (0, 90, 180, 270)"""
+        if degree in (0, 90, 180, 270):
+            self._config.setdefault("hardware", {})["lcd_rotation"] = degree
+            self.save()
 
 
 # 全局实例
