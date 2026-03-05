@@ -705,46 +705,57 @@ class FirmwareVersionChecker:
                 with contextlib.suppress(Exception):
                     self.on_version_checked(version)
 
-    def _do_check_version(self) -> str:
-        if not self.serial_assistant or not self.serial_assistant.is_connected:
-            return "未知"
+    def _do_check_version(self, max_retries: int = 10) -> str:
+        """查询固件版本，失败时每秒重试，最多 max_retries 次"""
+        import time
 
-        try:
-            self.serial_assistant.clear_rx_buffer()
-            self._response_buffer = ""
-            self._response_event.clear()
+        for attempt in range(max_retries):
+            if not self.serial_assistant or not self.serial_assistant.is_connected:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return "未知"
 
-            original_callback = self.serial_assistant.on_data_received
+            try:
+                self.serial_assistant.clear_rx_buffer()
+                self._response_buffer = ""
+                self._response_event.clear()
 
-            def capture_response(data: bytes) -> None:
-                try:
-                    text = data.decode('utf-8', errors='ignore')
-                    self._response_buffer += text
-                    if 'FW_VERSION:' in self._response_buffer:
-                        self._response_event.set()
-                except Exception:
-                    pass
-                if original_callback:
-                    original_callback(data)
+                original_callback = self.serial_assistant.on_data_received
 
-            self.serial_assistant.on_data_received = capture_response
-            self.serial_assistant.send_data("sys_get version\n")
-            got_response = self._response_event.wait(timeout=0.5)
-            self.serial_assistant.on_data_received = original_callback
+                def capture_response(data: bytes) -> None:
+                    try:
+                        text = data.decode('utf-8', errors='ignore')
+                        self._response_buffer += text
+                        if 'FW_VERSION:' in self._response_buffer:
+                            self._response_event.set()
+                    except Exception:
+                        pass
+                    if original_callback:
+                        original_callback(data)
 
-            if got_response:
-                match = self.VERSION_PATTERN.search(self._response_buffer)
-                if match:
-                    version_type = match.group(1)
-                    major = match.group(2)
-                    minor = match.group(3)
-                    patch = match.group(4)
-                    return self._format_version(version_type, major, minor, patch)
+                self.serial_assistant.on_data_received = capture_response
+                self.serial_assistant.send_data("sys_get version\n")
+                got_response = self._response_event.wait(timeout=1.0)
+                self.serial_assistant.on_data_received = original_callback
 
-            return "未知"
+                if got_response:
+                    match = self.VERSION_PATTERN.search(self._response_buffer)
+                    if match:
+                        version_type = match.group(1)
+                        major = match.group(2)
+                        minor = match.group(3)
+                        patch = match.group(4)
+                        return self._format_version(version_type, major, minor, patch)
 
-        except Exception:
-            return "未知"
+            except Exception:
+                pass
+
+            # 未获取到，等 1 秒后重试
+            if attempt < max_retries - 1:
+                time.sleep(1)
+
+        return "未知"
 
 
 _version_checker: FirmwareVersionChecker | None = None

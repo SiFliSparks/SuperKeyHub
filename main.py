@@ -1121,8 +1121,8 @@ async def main(page: ft.Page) -> None:
         content=ft.Column([
             ft.Row([weather_api_icon, weather_api_label], spacing=8),
 
+            weather_api_key_field,
             ft.Row([
-                weather_api_key_field,
                 weather_api_host_field,
                 weather_use_jwt_switch,
             ], spacing=12),
@@ -2250,13 +2250,16 @@ async def main(page: ft.Page) -> None:
                 weight=ft.FontWeight.BOLD,
                 color=theme.get("TEXT_PRIMARY")),
             ft.Row([
-                ft.Container(content=serial_config_card, expand=True),
-                ft.Container(content=app_settings_card, expand=True),
-            ], spacing=12, alignment=ft.MainAxisAlignment.START,
-               vertical_alignment=ft.CrossAxisAlignment.START),
-            app_update_card,
-            firmware_update_card,
-            weather_api_config_card,
+                ft.Column([
+                    serial_config_card,
+                    app_update_card,
+                    firmware_update_card,
+                ], spacing=12, expand=True),
+                ft.Column([
+                    app_settings_card,
+                    weather_api_config_card,
+                ], spacing=12, expand=True),
+            ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.START),
         ], spacing=12, scroll=ft.ScrollMode.ADAPTIVE, expand=True),
         padding=20,
         expand=True
