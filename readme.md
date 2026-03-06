@@ -2,6 +2,9 @@
 
 配合SuperKey设备完成各种功能的实现
 
+## 更新日志
+[点击查看最新日志](https://sparks.sifli.com/projects/superkey/custom/newlab.html)
+
 ## 功能特性
 - 硬件性能监控 — CPU/GPU/内存/磁盘/网络实时数据采集与下发
 - - Windows: PDH + LibreHardwareMonitor + psutil 混合架构
