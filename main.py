@@ -49,6 +49,7 @@ from firmware_updater import (
     set_firmware_updater_serial,
     get_version_checker,
     set_version_checker_serial,
+    get_ota_checker,
 )
 from app_updater import (
     AppUpdater,
@@ -154,8 +155,8 @@ if IS_WINDOWS:
 # ============================================================================
 # Version Configuration
 # ============================================================================
-APP_VERSION: str = "1.8.3"
-FIRMWARE_COMPAT: str = "1.2"
+APP_VERSION: str = "1.8.4"
+FIRMWARE_COMPAT: str = "1.4"
 APP_NAME: str = "SuperKeyHUB"
 # ============================================================================
 
@@ -1558,6 +1559,9 @@ async def main(page: ft.Page) -> None:
         if version and version != "未知":
             firmware_version_text.value = f"固件: {version}"
             firmware_version_text.color = theme.get("TEXT_SECONDARY")
+            # 自动检查固件在线更新
+            ota_checker.set_local_version(version)
+            ota_checker.check_update_async()
         else:
             firmware_version_text.value = "固件: 未知"
             firmware_version_text.color = theme.get("TEXT_TERTIARY")
@@ -2036,12 +2040,77 @@ async def main(page: ft.Page) -> None:
     # ==================== 固件更新卡片 ====================
     firmware_updater: FirmwareUpdater = get_firmware_updater()
     firmware_updater.set_serial_assistant(serial_assistant)
+    ota_checker = get_ota_checker()
 
     firmware_status_text: ft.Text = ft.Text(
         "等待选择固件文件",
         size=12,
         color=theme.get("TEXT_TERTIARY")
     )
+
+    ota_status_text: ft.Text = ft.Text(
+        "",
+        size=12,
+        color=theme.get("TEXT_TERTIARY")
+    )
+
+    ota_download_btn: ft.ElevatedButton = ft.ElevatedButton(
+        "下载并更新",
+        icon="cloud_download",
+        visible=False,
+    )
+
+    ota_check_btn: ft.TextButton = ft.TextButton(
+        "检查固件更新",
+        icon="refresh",
+    )
+
+    def on_ota_status_changed(status: str, msg: str) -> None:
+        ota_status_text.value = msg
+        color_map = {
+            "checking": theme.get("ACCENT"),
+            "available": theme.get("WARN"),
+            "downloading": theme.get("ACCENT"),
+            "ready": theme.get("GOOD"),
+            "error": theme.get("BAD"),
+            "idle": theme.get("TEXT_TERTIARY"),
+        }
+        ota_status_text.color = color_map.get(status, theme.get("TEXT_TERTIARY"))
+
+        ota_download_btn.visible = (status == "available")
+        ota_check_btn.visible = (status not in ("downloading", "ready"))
+
+        # 下载完成后自动加载到 firmware_updater
+        if status == "ready" and ota_checker.download_path:
+            zip_path = str(ota_checker.download_path)
+            valid, msg_v, files = firmware_updater.validate_firmware_zip(zip_path)
+            if valid:
+                firmware_file_info.value = f"在线固件 {ota_checker.remote_version} ({len(files)} 个文件)"
+                firmware_file_info.visible = True
+                firmware_update_btn.disabled = False
+                firmware_update_btn.visible = True
+                ota_download_btn.visible = False
+                firmware_status_text.value = f"固件 {ota_checker.remote_version} 已就绪，点击开始更新"
+                firmware_status_text.color = theme.get("GOOD")
+            else:
+                ota_status_text.value = f"固件包验证失败: {msg_v}"
+                ota_status_text.color = theme.get("BAD")
+
+        with contextlib.suppress(Exception):
+            page.update()
+
+    ota_checker.on_status_changed = on_ota_status_changed
+
+    def on_ota_check_click(e: ft.ControlEvent) -> None:
+        if version_checker.version_string:
+            ota_checker.set_local_version(version_checker.version_string)
+        ota_checker.check_update_async()
+
+    def on_ota_download_click(e: ft.ControlEvent) -> None:
+        ota_checker.download_async()
+
+    ota_check_btn.on_click = on_ota_check_click
+    ota_download_btn.on_click = on_ota_download_click
 
     firmware_progress_bar: ft.ProgressBar = ft.ProgressBar(
         width=320,
@@ -2255,6 +2324,12 @@ async def main(page: ft.Page) -> None:
             ], spacing=8),
             ft.Container(height=4),
             ft.Row([
+                ota_check_btn,
+                ota_download_btn,
+            ], spacing=8),
+            ota_status_text,
+            ft.Divider(height=1, color=theme.get("TEXT_TERTIARY"), opacity=0.3),
+            ft.Row([
                 select_firmware_btn,
                 firmware_update_btn,
             ], spacing=8),
@@ -2313,47 +2388,28 @@ async def main(page: ft.Page) -> None:
                 color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
             ft.Text(
-                "制作团队",
+                "更新日志",
                 size=16,
                 weight=ft.FontWeight.BOLD,
                 color=theme.get("TEXT_SECONDARY")),
             ft.Text(
-                "• 解博文 xiebowen1@outlook.com",
+                "• 新增：跟随系统休眠",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 蔡松 19914553473@163.com",
+                "• 新增：支持 0°/90°/180°/270° 四档旋转",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 郭雨十 2361768748@qq.com",
+                "• 优化：包括CPU 频率在内的性能数据采集优化",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 思澈科技（南京）提供技术支持",
-                size=12,
-                color=theme.get("TEXT_TERTIARY")),
-            ft.Container(height=20),
-            ft.Text(
-                "更新日志 2025年12月9日",
-                size=16,
-                weight=ft.FontWeight.BOLD,
-                color=theme.get("TEXT_SECONDARY")),
-            ft.Text(
-                "• 修复：天气信息自动更新，APP自动获取权限",
+                "• 优化：对设置页面重新布局以提升使用体验",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 新增：开机自启，自动检测与连接，配置保存，"
-                "后台运行，自定义按键配置",
-                size=12,
-                color=theme.get("TEXT_TERTIARY")),
-            ft.Text(
-                "• 删除：复杂的串口配置页面和数据下发间隔配置",
-                size=12,
-                color=theme.get("TEXT_TERTIARY")),
-            ft.Text(
-                "• 本次更新与旧版本固件部分兼容",
+                "• 本次所有新增功能均需配合固件 v1.4 版本使用，更多详情请查看文档",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
@@ -2366,6 +2422,21 @@ async def main(page: ft.Page) -> None:
                 "• Apache-2.0",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
+            ft.TextButton(
+                "点此查看更新内容",
+                url="https://sparks.sifli.com/projects/superkey/custom/newlab.html",
+                style=ft.ButtonStyle(padding=0),
+            ),
+            ft.TextButton(
+                "GitHub仓库（上位机）",
+                url="https://github.com/SiFliSparks/SuperKeyHub",
+                style=ft.ButtonStyle(padding=0),
+            ),
+            ft.TextButton(
+                "GitHub仓库（固件）",
+                url="https://github.com/SiFliSparks/SuperKey",
+                style=ft.ButtonStyle(padding=0),
+            ),
         ], spacing=8, horizontal_alignment=ft.CrossAxisAlignment.START),
         padding=20,
         expand=True

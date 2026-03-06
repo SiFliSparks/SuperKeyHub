@@ -1,6 +1,6 @@
 [project]
 name = "superkeyhub"
-version = "1.8.3"
+version = "1.8.4"
 description = "SuperKeyHUB"
 readme = "README.md"
 license = { text = "Apache-2.0" }

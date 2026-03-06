@@ -771,3 +771,152 @@ def get_version_checker() -> FirmwareVersionChecker:
 def set_version_checker_serial(serial_assistant: SerialAssistant) -> None:
     checker = get_version_checker()
     checker.set_serial_assistant(serial_assistant)
+
+
+# ============================================================================
+# 固件在线更新检测器
+# ============================================================================
+
+FW_VERID_URL: str = "https://sparks.sifli.com/projects/superkey/download/cos_root_artifacts/fw_verid.json"
+FW_DOWNLOAD_URL: str = "https://sparks.sifli.com/projects/superkey/download/firmware/{version}/cos_version_artifacts/SuperKey_{version}.zip"
+
+
+class FirmwareOTAChecker:
+    """检查固件远程版本并下载更新包"""
+
+    def __init__(self) -> None:
+        self.remote_version: str = ""       # e.g. "v1.4.0"
+        self.local_version: str = ""        # e.g. "v1.3.0"
+        self.download_path: Path | None = None
+        self.status: str = "idle"           # idle/checking/available/downloading/ready/error
+        self.progress: int = 0
+        self.error_msg: str = ""
+        self._lock = threading.Lock()
+
+        # 回调
+        self.on_status_changed: Callable[[str, str], None] | None = None
+
+    def _notify(self, msg: str = "") -> None:
+        if self.on_status_changed:
+            with contextlib.suppress(Exception):
+                self.on_status_changed(self.status, msg)
+
+    def set_local_version(self, version_str: str) -> None:
+        """从 version_checker 的结果中提取版本号，如 'release v1.3.0' -> 'v1.3.0'"""
+        import re
+        match = re.search(r'v(\d+\.\d+\.\d+)', version_str)
+        if match:
+            self.local_version = f"v{match.group(1)}"
+
+    def check_update_async(self) -> None:
+        threading.Thread(target=self._check_worker, daemon=True).start()
+
+    def _check_worker(self) -> None:
+        self.status = "checking"
+        self._notify("正在检查固件更新...")
+
+        try:
+            import urllib.request
+            import json
+
+            req = urllib.request.Request(
+                FW_VERID_URL,
+                headers={'User-Agent': 'SuperKeyHUB FW Checker'}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+
+            remote_ver = data.get("version", "").strip()
+            if not remote_ver:
+                self.status = "error"
+                self.error_msg = "无法获取远程版本信息"
+                self._notify(self.error_msg)
+                return
+
+            self.remote_version = remote_ver
+
+            if not self.local_version:
+                self.status = "error"
+                self.error_msg = "未获取到当前固件版本"
+                self._notify(self.error_msg)
+                return
+
+            if self._is_newer(remote_ver, self.local_version):
+                self.status = "available"
+                self._notify(f"发现新固件 {remote_ver}（当前 {self.local_version}）")
+            else:
+                self.status = "idle"
+                self._notify(f"固件已是最新版本 {self.local_version}")
+
+        except Exception as e:
+            self.status = "error"
+            self.error_msg = f"检查失败: {str(e)}"
+            self._notify(self.error_msg)
+
+    def _is_newer(self, remote: str, local: str) -> bool:
+        """比较版本号，remote > local 返回 True"""
+        import re
+
+        def parse(v: str) -> tuple[int, ...]:
+            m = re.search(r'(\d+)\.(\d+)\.(\d+)', v)
+            return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+        return parse(remote) > parse(local)
+
+    def download_async(self) -> None:
+        threading.Thread(target=self._download_worker, daemon=True).start()
+
+    def _download_worker(self) -> None:
+        if not self.remote_version:
+            return
+
+        self.status = "downloading"
+        self.progress = 0
+        self._notify(f"正在下载固件 {self.remote_version}...")
+
+        try:
+            import urllib.request
+
+            url = FW_DOWNLOAD_URL.format(version=self.remote_version)
+            filename = f"SuperKey_{self.remote_version}.zip"
+            download_path = Path(tempfile.gettempdir()) / filename
+
+            req = urllib.request.Request(
+                url, headers={'User-Agent': 'SuperKeyHUB FW Downloader'}
+            )
+
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                total = resp.getheader('Content-Length')
+                total = int(total) if total else 0
+                downloaded = 0
+
+                with open(download_path, 'wb') as f:
+                    while True:
+                        chunk = resp.read(8192)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if total > 0:
+                            self.progress = int((downloaded / total) * 100)
+                            self._notify(f"下载中 {self.progress}%")
+
+            self.download_path = download_path
+            self.progress = 100
+            self.status = "ready"
+            self._notify(f"固件 {self.remote_version} 下载完成，点击开始更新")
+
+        except Exception as e:
+            self.status = "error"
+            self.error_msg = f"下载失败: {str(e)}"
+            self._notify(self.error_msg)
+
+
+_ota_checker: FirmwareOTAChecker | None = None
+
+
+def get_ota_checker() -> FirmwareOTAChecker:
+    global _ota_checker
+    if _ota_checker is None:
+        _ota_checker = FirmwareOTAChecker()
+    return _ota_checker
