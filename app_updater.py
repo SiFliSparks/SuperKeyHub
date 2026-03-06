@@ -68,6 +68,7 @@ class AppUpdater:
         # 回调函数
         self.on_status_changed: Optional[Callable[[AppUpdateStatus, str], None]] = None
         self.on_progress_changed: Optional[Callable[[int], None]] = None
+        self.on_exit: Optional[Callable[[], None]] = None  # 安装前退出应用的回调
         
         # 线程锁
         self._lock = threading.Lock()
@@ -290,33 +291,44 @@ class AppUpdater:
         
         try:
             if IS_WINDOWS:
-                # Windows: 使用 cmd /c start 启动安装程序，然后退出
-                # 添加延迟确保主程序有时间退出
                 installer_path = str(self.download_path)
                 
-                # 创建批处理文件来延迟启动安装程序
+                # 创建批处理：等待当前进程退出后启动安装程序
                 batch_content = f'''@echo off
-timeout /t 2 /nobreak > nul
+timeout /t 3 /nobreak > nul
 start "" "{installer_path}"
+del "%~f0"
 '''
                 batch_path = Path(tempfile.gettempdir()) / "superkey_update.bat"
                 with open(batch_path, 'w') as f:
                     f.write(batch_content)
                 
-                # 启动批处理（分离进程）
-                subprocess.Popen(
-                    ['cmd', '/c', str(batch_path)],
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-                    close_fds=True
-                )
+                # 用 WMI 启动批处理，完全脱离当前进程树
+                # 这样 quit_app 的 psutil.children() 不会杀到它
+                try:
+                    import pythoncom
+                    pythoncom.CoInitialize()
+                    try:
+                        import wmi as wmi_mod
+                        c = wmi_mod.WMI()
+                        c.Win32_Process.Create(
+                            CommandLine=f'cmd.exe /c "{batch_path}"'
+                        )
+                    finally:
+                        pythoncom.CoUninitialize()
+                except Exception:
+                    # WMI 失败时 fallback 到 subprocess
+                    subprocess.Popen(
+                        ['cmd', '/c', str(batch_path)],
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+                        close_fds=True
+                    )
                 
             elif IS_MACOS:
-                # macOS: 打开DMG文件
                 installer_path = str(self.download_path)
                 
-                # 创建脚本来延迟打开DMG
                 script_content = f'''#!/bin/bash
-sleep 2
+sleep 3
 open "{installer_path}"
 '''
                 script_path = Path(tempfile.gettempdir()) / "superkey_update.sh"
@@ -324,16 +336,18 @@ open "{installer_path}"
                     f.write(script_content)
                 os.chmod(script_path, 0o755)
                 
-                # 启动脚本（分离进程）
                 subprocess.Popen(
                     ['/bin/bash', str(script_path)],
                     start_new_session=True,
                     close_fds=True
                 )
             
-            # 退出当前应用
+            # 退出当前应用（通过回调让主程序正确清理资源）
             time.sleep(0.5)
-            os._exit(0)
+            if self.on_exit:
+                self.on_exit()
+            else:
+                os._exit(0)
             
         except Exception as e:
             self._set_status(AppUpdateStatus.DOWNLOAD_FAILED, f"启动安装程序失败: {str(e)}")

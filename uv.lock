@@ -1486,7 +1486,7 @@ wheels = [
 
 [[package]]
 name = "superkeyhub"
-version = "1.8.1"
+version = "1.8.2"
 source = { editable = "." }
 dependencies = [
     { name = "flet", extra = ["all"] },
