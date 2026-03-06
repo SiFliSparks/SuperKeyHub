@@ -1,6 +1,5 @@
 # SuperKeyHUB
-
-配合SuperKey设备完成各种功能的实现
+SuperKeyHUB 是 SuperKey 嵌入式硬件设备的桌面端配套软件，基于 Flet 框架开发，支持 Windows 和 macOS 双平台。它通过 UART/CDC 串口与设备通信，实时采集并下发 CPU/GPU/内存等系统性能数据、天气信息、自定义按键配置和 LED 灯效控制，同时支持跟随系统休眠联动、屏幕旋转远程控制等设备管理功能。此外还内置了固件 OTA 更新、应用自更新检查、系统托盘后台运行和开机自启等完整的生命周期管理能力。
 
 ## 更新日志
 [点击查看最新日志](https://sparks.sifli.com/projects/superkey/custom/newlab.html)
