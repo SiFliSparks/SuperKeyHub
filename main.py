@@ -22,7 +22,7 @@ from custom_key_manager import (
     get_key_display_name,
     get_modifier_options,
 )
-from finsh_data_sender import FinshDataSender
+from finsh_data_sender import FinshDataSender, DataCategory
 from hw_monitor import (
     HardwareMonitor,
     bytes2human,
@@ -154,7 +154,7 @@ if IS_WINDOWS:
 # ============================================================================
 # Version Configuration
 # ============================================================================
-APP_VERSION: str = "1.8.2"
+APP_VERSION: str = "1.8.3"
 FIRMWARE_COMPAT: str = "1.2"
 APP_NAME: str = "SuperKeyHUB"
 # ============================================================================
@@ -617,6 +617,26 @@ async def main(page: ft.Page) -> None:
     power_monitor: PowerMonitor = PowerMonitor(serial_assistant)
     power_monitor.set_enabled(config_mgr.is_sleep_with_pc_enabled())
     power_monitor.start()
+
+    # ==================== 固件数据请求处理 ====================
+    _req_buffer: list[str] = [""]
+
+    def _on_serial_data_received(data: bytes) -> None:
+        """处理固件发来的数据，识别 REQ: 请求"""
+        try:
+            text = data.decode('utf-8', errors='ignore')
+            _req_buffer[0] += text
+            while '\n' in _req_buffer[0]:
+                line, _req_buffer[0] = _req_buffer[0].split('\n', 1)
+                line = line.strip()
+                if line == "REQ:weather":
+                    finsh_sender.send_now(DataCategory.API)
+                elif line == "REQ:time":
+                    finsh_sender.send_now(DataCategory.TIME)
+        except Exception:
+            pass
+
+    serial_assistant.on_data_received = _on_serial_data_received
 
     # ==================== 系统托盘初始化 ====================
     system_tray: SystemTray | None = None
@@ -1090,11 +1110,17 @@ async def main(page: ft.Page) -> None:
                 default_city=weather_default_city_field.value.strip()
             )
             if config_changed:
-                weather_config_status.value = "配置已保存"
+                weather_config_status.value = "配置已保存，正在刷新天气数据..."
                 weather_config_status.color = theme.get("GOOD")
 
-                if current_view["name"] == "api":
+                # 刷新首页天气显示
+                try:
                     update_weather()
+                except Exception:
+                    pass
+
+                # 立即下发天气数据到固件
+                finsh_sender.send_now(DataCategory.API)
             else:
                 weather_config_status.value = "配置无变化"
                 weather_config_status.color = theme.get("TEXT_TERTIARY")

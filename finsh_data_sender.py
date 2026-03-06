@@ -891,6 +891,23 @@ class FinshDataSender:
 
         self.sender_threads.clear()
 
+    def send_now(self, category: DataCategory) -> None:
+        """立即发送指定类别的数据（由固件 REQ: 请求触发）"""
+        if not self.enabled:
+            return
+        if category not in self.data_providers:
+            return
+
+        def _do_send() -> None:
+            try:
+                data_dict = self.data_providers[category]()
+                if data_dict:
+                    self._send_data_dict(data_dict)
+            except Exception:
+                pass
+
+        threading.Thread(target=_do_send, daemon=True).start()
+
     def _start_sender_thread(self, category: DataCategory) -> None:
         """启动指定类别的发送线程
 
@@ -1135,28 +1152,13 @@ class FinshDataSender:
             cpu_data = self.hardware_monitor.get_cpu_data()
             data["cpu"] = float(cpu_data.get("usage", 0) or 0)
             data["cpu_temp"] = float(cpu_data.get("temp", 0) or 0)
-            clock = cpu_data.get("clock_mhz")
-            if clock is not None:
-                data["cpu_freq"] = round(float(clock), 0)
 
             mem_data = self.hardware_monitor.get_memory_data()
             data["mem"] = float(mem_data.get("percent", 0) or 0)
-            mem_used = mem_data.get("used_b")
-            mem_total = mem_data.get("total_b")
-            if mem_used is not None:
-                data["mem_used"] = round(mem_used / (1024 ** 3), 2)
-            if mem_total is not None:
-                data["mem_total"] = round(mem_total / (1024 ** 3), 2)
 
             gpu_data = self.hardware_monitor.get_gpu_data(self.gpu_index)
             data["gpu"] = float(gpu_data.get("util", 0) or 0)
             data["gpu_temp"] = float(gpu_data.get("temp", 0) or 0)
-            gpu_mem_used = gpu_data.get("mem_used_b")
-            gpu_mem_total = gpu_data.get("mem_total_b")
-            if gpu_mem_used is not None:
-                data["gpu_mem_used"] = round(gpu_mem_used / (1024 ** 3), 2)
-            if gpu_mem_total is not None:
-                data["gpu_mem_total"] = round(gpu_mem_total / (1024 ** 3), 2)
 
             net_data = self.hardware_monitor.get_network_data()
             net_up = net_data.get("up", 0) or 0
@@ -1213,4 +1215,5 @@ class FinshDataSender:
         }
 
     def __del__(self) -> None:
+        """析构函数，确保资源释放"""
         self.stop()
