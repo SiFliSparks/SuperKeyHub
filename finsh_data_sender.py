@@ -1152,13 +1152,24 @@ class FinshDataSender:
             cpu_data = self.hardware_monitor.get_cpu_data()
             data["cpu"] = float(cpu_data.get("usage", 0) or 0)
             data["cpu_temp"] = float(cpu_data.get("temp", 0) or 0)
+            cpu_freq = cpu_data.get("clock_mhz")
+            if cpu_freq is not None:
+                data["cpu_freq"] = int(round(float(cpu_freq)))
 
             mem_data = self.hardware_monitor.get_memory_data()
             data["mem"] = float(mem_data.get("percent", 0) or 0)
+            mem_used_b = mem_data.get("used_b", 0) or 0
+            mem_total_b = mem_data.get("total_b", 0) or 0
+            data["mem_used"] = round(mem_used_b / (1024 ** 3), 1)
+            data["mem_total"] = round(mem_total_b / (1024 ** 3), 1)
 
             gpu_data = self.hardware_monitor.get_gpu_data(self.gpu_index)
             data["gpu"] = float(gpu_data.get("util", 0) or 0)
             data["gpu_temp"] = float(gpu_data.get("temp", 0) or 0)
+            gpu_mem_used_b = gpu_data.get("mem_used_b", 0) or 0
+            gpu_mem_total_b = gpu_data.get("mem_total_b", 0) or 0
+            data["gpu_mem_used"] = round(gpu_mem_used_b / (1024 ** 3), 1)
+            data["gpu_mem_total"] = round(gpu_mem_total_b / (1024 ** 3), 1)
 
             net_data = self.hardware_monitor.get_network_data()
             net_up = net_data.get("up", 0) or 0

@@ -9,7 +9,7 @@
 ; Configuration
 ; ============================================================================
 !define APP_NAME "SuperKeyHUB"
-!define APP_VERSION "1.8.4"
+!define APP_VERSION "1.8.5"
 !define APP_AUTHOR "Jingle_xie"
 !define APP_DESCRIPTION "SuperKey Hardware Monitor"
 !define APP_URL "https://sparks.sifli.com/projects/superkey/"
