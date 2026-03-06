@@ -77,6 +77,28 @@ class WindowsPDH:
             self._available = False
 
     def _read_base_freq(self) -> int | None:
+        """Read CPU base frequency in MHz.
+
+        WMI Win32_Processor.MaxClockSpeed returns the correct base frequency
+        on both AMD and Intel hybrid-architecture CPUs.
+        Registry ~MHz is unreliable on Intel hybrid CPUs (reports P-core boost).
+        """
+        # WMI: correct on all tested platforms (AMD Zen5, Intel hybrid)
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            try:
+                import wmi as wmi_mod
+                w = wmi_mod.WMI()
+                for cpu in w.Win32_Processor():
+                    if cpu.MaxClockSpeed:
+                        return int(cpu.MaxClockSpeed)
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception:
+            pass
+
+        # Fallback: registry (may be wrong on Intel hybrid CPUs)
         try:
             import winreg
             key = winreg.OpenKey(
