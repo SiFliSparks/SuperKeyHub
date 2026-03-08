@@ -9,7 +9,7 @@
 ; Configuration
 ; ============================================================================
 !define APP_NAME "SuperKeyHUB"
-!define APP_VERSION "1.8.5"
+!define APP_VERSION "1.8.6"
 !define APP_AUTHOR "Jingle_xie"
 !define APP_DESCRIPTION "SuperKey Hardware Monitor"
 !define APP_URL "https://sparks.sifli.com/projects/superkey/"
@@ -142,7 +142,13 @@ SectionEnd
 ; Uninstall Section
 ; ============================================================================
 Section "Uninstall"
-    ; Kill running process
+    ; Kill running process and entire process tree
+    ; /T = kill child processes (Flet/Flutter subprocesses)
+    ; /F = force kill
+    nsExec::ExecToLog 'taskkill /F /T /IM "${APP_EXE}"'
+    ; Wait for processes to fully exit
+    nsExec::ExecToLog 'cmd.exe /c "timeout /t 2 /nobreak >nul"'
+    ; Second pass to catch any stragglers
     nsExec::ExecToLog 'taskkill /F /IM "${APP_EXE}"'
     
     ; Clean auto-start - registry method (current)
@@ -162,14 +168,27 @@ Section "Uninstall"
     DeleteRegKey HKLM "Software\${APP_NAME}"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_NAME}"
     
-    ; Delete user config directory (optional, comment out to keep user config)
-    RMDir /r "$APPDATA\SuperKey"
+    ; Only delete user config on full uninstall, NOT during update.
+    ; The installer's .onInit creates a marker file before calling Uninstall.exe.
+    ; If the marker exists, this is an upgrade - preserve config and remove the marker.
+    IfFileExists "$APPDATA\SuperKey\.updating" 0 full_uninstall
+        ; Upgrade path: preserve config, just remove the marker
+        Delete "$APPDATA\SuperKey\.updating"
+        Goto done_config
+    full_uninstall:
+        ; User-initiated uninstall: remove all config
+        RMDir /r "$APPDATA\SuperKey"
+    done_config:
 SectionEnd
 
 ; ============================================================================
 ; Pre-Install Check
 ; ============================================================================
 Function .onInit
+    ; Kill any running instance first (including Flet child processes)
+    nsExec::ExecToLog 'taskkill /F /T /IM "${APP_EXE}"'
+    nsExec::ExecToLog 'cmd.exe /c "timeout /t 2 /nobreak >nul"'
+
     ReadRegStr $0 HKLM "Software\${APP_NAME}" "InstallDir"
     ${If} $0 != ""
         MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
@@ -177,6 +196,18 @@ Function .onInit
             IDOK uninst
         Abort
     uninst:
+        ; Kill again in case user waited before clicking OK
+        nsExec::ExecToLog 'taskkill /F /T /IM "${APP_EXE}"'
+        nsExec::ExecToLog 'cmd.exe /c "timeout /t 2 /nobreak >nul"'
+        ; Create marker file so uninstaller knows this is an upgrade
+        ; (Command-line args are unreliable because NSIS uninstaller copies itself to %TEMP%)
+        CreateDirectory "$APPDATA\SuperKey"
+        FileOpen $1 "$APPDATA\SuperKey\.updating" w
+        FileWrite $1 "upgrade"
+        FileClose $1
+        ; Run silent uninstall
         ExecWait '"$0\Uninstall.exe" /S'
+        ; Wait for uninstaller to finish releasing files
+        nsExec::ExecToLog 'cmd.exe /c "timeout /t 2 /nobreak >nul"'
     ${EndIf}
 FunctionEnd

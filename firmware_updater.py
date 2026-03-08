@@ -819,11 +819,20 @@ class FirmwareOTAChecker:
             import urllib.request
             import json
 
+            import time as _time
+            import ssl
+
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.set_ciphers('DEFAULT')
+            ssl_ctx.check_hostname = True
+            ssl_ctx.verify_mode = ssl.CERT_REQUIRED
+
+            cache_bust_url = f"{FW_VERID_URL}?t={int(_time.time())}"
             req = urllib.request.Request(
-                FW_VERID_URL,
+                cache_bust_url,
                 headers={'User-Agent': 'SuperKeyHUB FW Checker'}
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
 
             remote_ver = data.get("version", "").strip()
@@ -876,6 +885,10 @@ class FirmwareOTAChecker:
 
         try:
             import urllib.request
+            import ssl
+
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.set_ciphers('DEFAULT')
 
             url = FW_DOWNLOAD_URL.format(version=self.remote_version)
             filename = f"SuperKey_{self.remote_version}.zip"
@@ -885,7 +898,7 @@ class FirmwareOTAChecker:
                 url, headers={'User-Agent': 'SuperKeyHUB FW Downloader'}
             )
 
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=300, context=ssl_ctx) as resp:
                 total = resp.getheader('Content-Length')
                 total = int(total) if total else 0
                 downloaded = 0

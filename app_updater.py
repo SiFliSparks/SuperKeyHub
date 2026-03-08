@@ -139,14 +139,16 @@ class AppUpdater:
         self._set_status(AppUpdateStatus.CHECKING)
         
         try:
-            # 创建请求
+            import ssl
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.set_ciphers('DEFAULT')
+
             req = urllib.request.Request(
-                VERSION_CHECK_URL,
+                f"{VERSION_CHECK_URL}?t={int(time.time())}",
                 headers={'User-Agent': 'SuperKeyHUB Updater'}
             )
             
-            # 设置超时
-            with urllib.request.urlopen(req, timeout=15) as response:
+            with urllib.request.urlopen(req, timeout=15, context=ssl_ctx) as response:
                 data = response.read().decode('utf-8')
             
             # 解析JSON
@@ -240,14 +242,16 @@ class AppUpdater:
             temp_dir = tempfile.gettempdir()
             download_path = Path(temp_dir) / filename
             
-            # 创建请求
+            import ssl
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.set_ciphers('DEFAULT')
+
             req = urllib.request.Request(
                 url,
                 headers={'User-Agent': 'SuperKeyHUB Updater'}
             )
             
-            # 下载文件
-            with urllib.request.urlopen(req, timeout=300) as response:
+            with urllib.request.urlopen(req, timeout=300, context=ssl_ctx) as response:
                 total_size = response.getheader('Content-Length')
                 total_size = int(total_size) if total_size else 0
                 
@@ -292,10 +296,33 @@ class AppUpdater:
         try:
             if IS_WINDOWS:
                 installer_path = str(self.download_path)
+                current_pid = os.getpid()
                 
-                # 创建批处理：等待当前进程退出后启动安装程序
+                # 创建批处理：
+                # 1. 先用 taskkill /T /F /PID 杀掉整个进程树（包括 Flet 子进程）
+                # 2. 循环检测进程是否真正退出
+                # 3. 再杀一次按进程名兜底（防止有脱离进程树的残留）
+                # 4. 确认无残留后启动安装程序
                 batch_content = f'''@echo off
-timeout /t 3 /nobreak > nul
+rem === SuperKeyHUB Update Helper ===
+rem Kill entire process tree by PID (includes Flet/Flutter child processes)
+taskkill /F /T /PID {current_pid} >nul 2>&1
+
+rem Wait for process to fully exit (max 15 seconds)
+set /a count=0
+:wait_loop
+tasklist /FI "PID eq {current_pid}" 2>nul | find /I "{current_pid}" >nul 2>&1
+if errorlevel 1 goto process_exited
+timeout /t 1 /nobreak >nul
+set /a count+=1
+if %count% lss 15 goto wait_loop
+
+:process_exited
+rem Extra kill by name to catch any orphaned processes
+taskkill /F /IM "SuperKeyHUB.exe" >nul 2>&1
+timeout /t 2 /nobreak >nul
+
+rem Launch installer
 start "" "{installer_path}"
 del "%~f0"
 '''
@@ -326,9 +353,22 @@ del "%~f0"
                 
             elif IS_MACOS:
                 installer_path = str(self.download_path)
+                current_pid = os.getpid()
                 
                 script_content = f'''#!/bin/bash
-sleep 3
+# Kill process tree
+kill -9 -{current_pid} 2>/dev/null
+kill -9 {current_pid} 2>/dev/null
+
+# Wait for exit
+for i in $(seq 1 10); do
+    kill -0 {current_pid} 2>/dev/null || break
+    sleep 1
+done
+
+# Kill by name as fallback
+pkill -9 -f "SuperKeyHUB" 2>/dev/null
+sleep 2
 open "{installer_path}"
 '''
                 script_path = Path(tempfile.gettempdir()) / "superkey_update.sh"

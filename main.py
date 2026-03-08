@@ -155,7 +155,7 @@ if IS_WINDOWS:
 # ============================================================================
 # Version Configuration
 # ============================================================================
-APP_VERSION: str = "1.8.5"
+APP_VERSION: str = "1.8.6"
 FIRMWARE_COMPAT: str = "1.4"
 APP_NAME: str = "SuperKeyHUB"
 # ============================================================================
@@ -651,6 +651,10 @@ async def main(page: ft.Page) -> None:
         with contextlib.suppress(BaseException):
             page.update()
 
+    # 注册单实例回调：其他实例尝试启动时，拉起当前窗口
+    global _instance_show_callback
+    _instance_show_callback = show_window
+
     def cleanup_and_exit() -> None:
         """清理资源（快速版本）"""
         import contextlib
@@ -1044,6 +1048,7 @@ async def main(page: ft.Page) -> None:
         label="API密钥",
         value="",
         password=True,
+        can_reveal_password=True,
         width=300,
         helper_text="在dev.qweather.com申请",
         on_change=lambda e: update_weather_config()
@@ -1113,15 +1118,26 @@ async def main(page: ft.Page) -> None:
             if config_changed:
                 weather_config_status.value = "配置已保存，正在刷新天气数据..."
                 weather_config_status.color = theme.get("GOOD")
+                page.update()
 
                 # 刷新首页天气显示
+                refresh_ok = False
                 try:
                     update_weather()
+                    refresh_ok = True
                 except Exception:
                     pass
 
                 # 立即下发天气数据到固件
                 finsh_sender.send_now(DataCategory.API)
+
+                # 根据刷新结果更新状态提示
+                if refresh_ok:
+                    weather_config_status.value = "配置已保存，天气数据刷新成功"
+                    weather_config_status.color = theme.get("GOOD")
+                else:
+                    weather_config_status.value = "配置已保存，但天气数据刷新失败"
+                    weather_config_status.color = theme.get("WARN")
             else:
                 weather_config_status.value = "配置无变化"
                 weather_config_status.color = theme.get("TEXT_TERTIARY")
@@ -3545,6 +3561,83 @@ def get_assets_dir() -> str:
         # 开发环境
         base_path = Path(__file__).parent
     return str(base_path / "assets")
+
+
+# ============================================================================
+# 单实例守卫 - 防止多开
+# ============================================================================
+import socket as _socket
+
+_INSTANCE_LOCK_PORT: int = 52741  # SuperKey 专用端口
+_instance_lock_socket: _socket.socket | None = None
+_instance_show_callback: Callable[[], None] | None = None  # 由 main() 设置
+
+
+def _acquire_single_instance_lock() -> bool:
+    """
+    通过绑定本地端口实现单实例检测。
+    成功后启动后台监听线程，等待其他实例发送 SHOW 信号。
+
+    Returns:
+        True: 成功获取锁（当前是唯一实例）
+        False: 获取失败（已有实例在运行）
+    """
+    global _instance_lock_socket
+
+    try:
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 0)
+        sock.bind(('127.0.0.1', _INSTANCE_LOCK_PORT))
+        sock.listen(2)
+        _instance_lock_socket = sock
+
+        # 启动后台监听线程
+        t = threading.Thread(target=_instance_listen_worker, daemon=True)
+        t.start()
+
+        return True
+    except OSError:
+        return False
+
+
+def _instance_listen_worker() -> None:
+    """
+    后台线程：accept 连接，收到 SHOW 信号后触发回调让主实例显示窗口。
+    """
+    while True:
+        try:
+            if _instance_lock_socket is None:
+                break
+            conn, _ = _instance_lock_socket.accept()
+            try:
+                data = conn.recv(64)
+                if data.strip() == b"SHOW" and _instance_show_callback:
+                    _instance_show_callback()
+            except Exception:
+                pass
+            finally:
+                conn.close()
+        except OSError:
+            break
+        except Exception:
+            continue
+
+
+def _signal_existing_instance() -> None:
+    """第二个实例：连接到已有实例发送 SHOW 信号，让它把窗口拉到前台。"""
+    try:
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        sock.settimeout(2.0)
+        sock.connect(('127.0.0.1', _INSTANCE_LOCK_PORT))
+        sock.sendall(b"SHOW")
+        sock.close()
+    except Exception:
+        pass
+
+
+if not _acquire_single_instance_lock():
+    _signal_existing_instance()
+    sys.exit(0)
 
 
 ft.app(
