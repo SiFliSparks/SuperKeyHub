@@ -155,7 +155,7 @@ if IS_WINDOWS:
 # ============================================================================
 # Version Configuration
 # ============================================================================
-APP_VERSION: str = "1.8.6"
+APP_VERSION: str = "1.8.7"
 FIRMWARE_COMPAT: str = "1.4"
 APP_NAME: str = "SuperKeyHUB"
 # ============================================================================
@@ -655,6 +655,20 @@ async def main(page: ft.Page) -> None:
     global _instance_show_callback
     _instance_show_callback = show_window
 
+    def minimize_to_tray() -> None:
+        """最小化到托盘，每次新安装/更新后首次最小化时弹出通知"""
+        page.window.visible = False
+        page.update()
+        if config_mgr.get_tray_notified_version() != APP_VERSION:
+            config_mgr.set_tray_notified_version(APP_VERSION)
+            if system_tray:
+                if IS_MACOS:
+                    system_tray.show_notification(
+                        APP_NAME, "App minimized to system tray")
+                else:
+                    system_tray.show_notification(
+                        APP_NAME, "程序已最小化到系统托盘")
+
     def cleanup_and_exit() -> None:
         """清理资源（快速版本）"""
         import contextlib
@@ -708,14 +722,7 @@ async def main(page: ft.Page) -> None:
             tray_available: bool = is_tray_available()
             should_minimize: bool = config_mgr.should_minimize_to_tray()
             if system_tray and tray_available and should_minimize:
-                page.window.visible = False
-                page.update()
-                if IS_MACOS:
-                    system_tray.show_notification(
-                        APP_NAME, "App minimized to system tray")
-                else:
-                    system_tray.show_notification(
-                        APP_NAME, "程序已最小化到系统托盘")
+                minimize_to_tray()
             else:
                 quit_app()
 
@@ -752,14 +759,7 @@ async def main(page: ft.Page) -> None:
         tray_available: bool = is_tray_available()
         should_minimize: bool = config_mgr.should_minimize_to_tray()
         if system_tray and tray_available and should_minimize:
-            page.window.visible = False
-            page.update()
-            if IS_MACOS:
-                system_tray.show_notification(
-                    APP_NAME, "App minimized to system tray")
-            else:
-                system_tray.show_notification(
-                    APP_NAME, "程序已最小化到系统托盘")
+            minimize_to_tray()
         else:
             quit_app()
 
@@ -1542,9 +1542,18 @@ async def main(page: ft.Page) -> None:
                 text=f"{p['port']} - {p['description']}")
             for p in ports
         ]
+        # 未连接时默认选第一个
         if not serial_assistant.is_connected and ports:
-            port_dropdown.value = ports[0]['port']
-        page.update()
+            # 如果当前选中的端口仍在列表中，保留选择
+            current_val = port_dropdown.value
+            if not current_val or not any(p['port'] == current_val for p in ports):
+                port_dropdown.value = ports[0]['port']
+        with contextlib.suppress(Exception):
+            page.update()
+
+    def on_ports_changed() -> None:
+        """串口设备列表发生变化时自动刷新下拉菜单"""
+        refresh_ports()
 
     refresh_port_btn: ft.IconButton = ft.IconButton(
         icon="refresh",
@@ -1628,7 +1637,6 @@ async def main(page: ft.Page) -> None:
         """处理自动重连事件"""
         if success:
             port_dropdown.value = port
-            port_dropdown.disabled = True
 
             if is_reconnect:
                 port_status_text.value = "已重连"
@@ -1646,9 +1654,13 @@ async def main(page: ft.Page) -> None:
             _sync_lcd_rotation_async()
             update_device_status_indicator(True)
         else:
-            port_dropdown.disabled = False
-            port_status_text.value = "连接断开"
-            port_status_text.color = theme.get("WARN")
+            if is_reconnect:
+                # 重连超时，放弃自动重连
+                port_status_text.value = "重连超时，请手动连接"
+                port_status_text.color = theme.get("BAD")
+            else:
+                port_status_text.value = "连接断开"
+                port_status_text.color = theme.get("WARN")
             firmware_version_text.value = ""
             finsh_sender.stop()
             update_device_status_indicator(False)
@@ -1659,7 +1671,6 @@ async def main(page: ft.Page) -> None:
         """处理连接状态变化"""
         if connected:
             # 连接成功（包括烧录后重连）
-            port_dropdown.disabled = True
             port_status_text.value = "已连接"
             port_status_text.color = theme.get("GOOD")
 
@@ -1670,6 +1681,7 @@ async def main(page: ft.Page) -> None:
             port = serial_assistant.config.get('port', '')
             if port:
                 config_mgr.set_last_port(port)
+                port_dropdown.value = port
 
             # 触发固件版本检测
             trigger_version_check()
@@ -1677,7 +1689,6 @@ async def main(page: ft.Page) -> None:
             update_device_status_indicator(True)
         else:
             # 连接断开
-            port_dropdown.disabled = False
             firmware_version_text.value = ""
             if not serial_assistant._manual_disconnect:
                 port_status_text.value = "连接断开，正在重连..."
@@ -1693,14 +1704,26 @@ async def main(page: ft.Page) -> None:
 
     serial_assistant.on_auto_reconnect = on_auto_reconnect
     serial_assistant.on_connection_changed = on_connection_changed
+    serial_assistant.on_ports_changed = on_ports_changed
 
     def on_port_selected(port: str) -> None:
         if not port:
             return
 
+        # 如果选的是当前已连接的端口，不做任何操作
+        current_port = serial_assistant.config.get('port', '')
+        if serial_assistant.is_connected and port == current_port:
+            return
+
+        # 切换端口：先断开旧连接（静默，不触发自动重连）
         if serial_assistant.is_connected:
             finsh_sender.stop()
             serial_assistant.disconnect()
+
+        port_status_text.value = "正在连接..."
+        port_status_text.color = theme.get("WARN")
+        firmware_version_text.value = ""
+        page.update()
 
         serial_assistant.configure(
             port=port,
@@ -1711,12 +1734,10 @@ async def main(page: ft.Page) -> None:
         )
 
         if serial_assistant.connect():
-            port_dropdown.disabled = True
             port_status_text.value = "已连接"
             port_status_text.color = theme.get("GOOD")
             finsh_sender.start()
             config_mgr.set_last_port(port)
-            # 手动连接成功，触发版本检测
             trigger_version_check()
             _sync_lcd_rotation_async()
             update_device_status_indicator(True)
@@ -1731,10 +1752,10 @@ async def main(page: ft.Page) -> None:
         if serial_assistant.is_connected:
             finsh_sender.stop()
             serial_assistant.disconnect()
-            port_dropdown.disabled = False
             port_status_text.value = "已断开"
             port_status_text.color = theme.get("TEXT_TERTIARY")
             firmware_version_text.value = ""
+            update_device_status_indicator(False)
             page.update()
 
     disconnect_btn: ft.IconButton = ft.IconButton(
@@ -1770,7 +1791,7 @@ async def main(page: ft.Page) -> None:
 
     refresh_ports()
 
-    serial_assistant.enable_auto_reconnect(enabled=True, interval=2.0)
+    serial_assistant.enable_auto_reconnect(enabled=True, interval=2.0, timeout=60.0)
 
     if config_mgr.should_auto_connect():
         last_port: str | None = config_mgr.get_last_port()
@@ -1789,7 +1810,6 @@ async def main(page: ft.Page) -> None:
 
                 if serial_assistant.connect():
                     port_dropdown.value = last_port
-                    port_dropdown.disabled = True
                     port_status_text.value = "已连接"
                     port_status_text.color = theme.get("GOOD")
                     finsh_sender.start()
@@ -2425,7 +2445,7 @@ async def main(page: ft.Page) -> None:
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Text(
-                "• 本次所有新增功能均需配合固件 v1.4 版本使用，更多详情请查看文档",
+                "• 本次所有新增功能均需配合固件 v1.4 版本使用，更多详情请点按下方链接查看更新内容",
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.Container(height=20),
@@ -2439,7 +2459,7 @@ async def main(page: ft.Page) -> None:
                 size=12,
                 color=theme.get("TEXT_TERTIARY")),
             ft.TextButton(
-                "点此查看更新内容",
+                "更新内容",
                 url="https://sparks.sifli.com/projects/superkey/custom/newlab.html",
                 style=ft.ButtonStyle(padding=0),
             ),

@@ -62,6 +62,7 @@ class ConfigManager:
                 "minimize_to_tray": True,  # 关闭时最小化到托盘
                 "auto_start": False,  # 开机自启动
                 "sleep_with_pc": False,  # 随PC休眠
+                "tray_notified_version": "",  # 已弹过托盘提示的版本号
             },
         }
 
@@ -176,6 +177,15 @@ class ConfigManager:
     def set_sleep_with_pc(self, value: bool) -> None:
         """设置随PC休眠"""
         self._config.setdefault("app", {})["sleep_with_pc"] = value
+        self.save()
+
+    def get_tray_notified_version(self) -> str:
+        """获取已弹过托盘提示的版本号"""
+        return self._config.get("app", {}).get("tray_notified_version", "")
+
+    def set_tray_notified_version(self, version: str) -> None:
+        """记录已弹过托盘提示的版本号"""
+        self._config.setdefault("app", {})["tray_notified_version"] = version
         self.save()
 
     # ===== 硬件配置 =====

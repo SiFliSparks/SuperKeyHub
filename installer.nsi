@@ -1,6 +1,8 @@
-; ============================================================================
+﻿; ============================================================================
 ; SuperKeyHUB NSIS Installer Script
 ; ============================================================================
+
+Unicode true
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
@@ -9,7 +11,7 @@
 ; Configuration
 ; ============================================================================
 !define APP_NAME "SuperKeyHUB"
-!define APP_VERSION "1.8.6"
+!define APP_VERSION "1.8.7"
 !define APP_AUTHOR "Jingle_xie"
 !define APP_DESCRIPTION "SuperKey Hardware Monitor"
 !define APP_URL "https://sparks.sifli.com/projects/superkey/"
@@ -185,20 +187,24 @@ SectionEnd
 ; Pre-Install Check
 ; ============================================================================
 Function .onInit
-    ; Kill any running instance first (including Flet child processes)
-    nsExec::ExecToLog 'taskkill /F /T /IM "${APP_EXE}"'
-    nsExec::ExecToLog 'cmd.exe /c "timeout /t 2 /nobreak >nul"'
-
+    ; Check for existing installation FIRST, before doing anything destructive
     ReadRegStr $0 HKLM "Software\${APP_NAME}" "InstallDir"
     ${If} $0 != ""
-        MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
-            "Detected existing ${APP_NAME} installation.$\n$\nClick OK to uninstall the old version first, then install the new version." \
-            IDOK uninst
+        ; Read installed version for display
+        ReadRegStr $1 HKLM "Software\${APP_NAME}" "Version"
+        ${If} $1 != ""
+            MessageBox MB_OKCANCEL|MB_ICONINFORMATION "检测到本机已安装 ${APP_NAME} $1。$\n$\n若继续，将卸载旧版本并安装 ${APP_VERSION}。" IDOK do_uninst
+        ${Else}
+            MessageBox MB_OKCANCEL|MB_ICONINFORMATION "检测到本机已安装 ${APP_NAME}。$\n$\n若继续，将卸载旧版本并安装 ${APP_VERSION}。" IDOK do_uninst
+        ${EndIf}
+        ; User clicked Cancel — abort the entire installer
         Abort
-    uninst:
-        ; Kill again in case user waited before clicking OK
+    do_uninst:
+        ; User confirmed — NOW kill running processes
         nsExec::ExecToLog 'taskkill /F /T /IM "${APP_EXE}"'
         nsExec::ExecToLog 'cmd.exe /c "timeout /t 2 /nobreak >nul"'
+        nsExec::ExecToLog 'taskkill /F /IM "${APP_EXE}"'
+        nsExec::ExecToLog 'cmd.exe /c "timeout /t 1 /nobreak >nul"'
         ; Create marker file so uninstaller knows this is an upgrade
         ; (Command-line args are unreliable because NSIS uninstaller copies itself to %TEMP%)
         CreateDirectory "$APPDATA\SuperKey"

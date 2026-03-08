@@ -46,6 +46,14 @@ class SerialAssistant:
         self._connection_lost: bool = False
         self._manual_disconnect: bool = False
 
+        # 重连超时：超过此时间未重连成功则放弃
+        self._reconnect_timeout: float = 60.0  # 秒
+        self._reconnect_start_time: float = 0.0  # 开始重连的时间戳
+
+        # 串口列表变化检测
+        self._last_known_ports: set[str] = set()
+        self.on_ports_changed: Callable[[], None] | None = None
+
         self.config: dict[str, Any] = {
             'port': '',
             'baudrate': 1000000,
@@ -81,9 +89,11 @@ class SerialAssistant:
     def enable_auto_reconnect(
             self,
             enabled: bool = True,
-            interval: float = 2.0) -> None:
+            interval: float = 2.0,
+            timeout: float = 60.0) -> None:
         self._auto_reconnect_enabled = enabled
         self._reconnect_interval = max(0.5, interval)
+        self._reconnect_timeout = max(10.0, timeout)
         if enabled:
             self._start_monitor()
         elif not enabled:
@@ -116,10 +126,26 @@ class SerialAssistant:
         while not self.stop_monitor.is_set():
             with contextlib.suppress(Exception):
                 self._check_connection_status()
+            # 检测串口列表变化（用于自动刷新 UI）
+            with contextlib.suppress(Exception):
+                self._check_ports_changed()
             for _ in range(int(self._reconnect_interval * 10)):
                 if self.stop_monitor.is_set():
                     break
                 time.sleep(0.1)
+
+    def _check_ports_changed(self) -> None:
+        """检测串口设备列表是否发生变化"""
+        try:
+            current_ports: set[str] = {
+                p.device for p in serial.tools.list_ports.comports()
+            }
+            if current_ports != self._last_known_ports:
+                self._last_known_ports = current_ports
+                if self.on_ports_changed:
+                    self.on_ports_changed()
+        except Exception:
+            pass
 
     def _check_connection_status(self) -> None:
         if not self._auto_reconnect_enabled:
@@ -154,6 +180,7 @@ class SerialAssistant:
             return False
 
     def _handle_connection_lost(self) -> None:
+        self._reconnect_start_time = time.time()
         self._cleanup_connection()
         if self.on_connection_changed:
             self.on_connection_changed(False)
@@ -187,6 +214,17 @@ class SerialAssistant:
     def _try_reconnect(self) -> None:
         if self._is_reconnecting:
             return
+
+        # 检查重连是否超时
+        if (self._reconnect_start_time > 0
+                and time.time() - self._reconnect_start_time > self._reconnect_timeout):
+            self._connection_lost = False
+            self._reconnect_start_time = 0.0
+            # 通知 UI 重连超时（通过 on_auto_reconnect(False, ...) ）
+            if self.on_auto_reconnect:
+                self.on_auto_reconnect(False, self._last_connected_port, True)
+            return
+
         self._is_reconnecting = True
         try:
             target_port: str = self._last_connected_port
@@ -197,6 +235,7 @@ class SerialAssistant:
             self.config['port'] = target_port
             if self._connect_internal():
                 self._connection_lost = False
+                self._reconnect_start_time = 0.0
                 if self.on_auto_reconnect:
                     self.on_auto_reconnect(True, target_port, True)
         finally:
