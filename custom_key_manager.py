@@ -8,6 +8,7 @@ import os
 import platform
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,19 @@ class Modifier:
     SHIFT: int = 0x02
     ALT: int = 0x04
     GUI: int = 0x08  # Win/Cmd
+
+
+def get_modifier_display_name(modifier: int) -> str:
+    """返回适合当前平台的修饰键组合名称"""
+    gui_name: str = "Cmd" if platform.system().lower() == "darwin" else "Win"
+    modifier_names: tuple[tuple[int, str], ...] = (
+        (Modifier.CTRL, "Ctrl"),
+        (Modifier.GUI, gui_name),
+        (Modifier.SHIFT, "Shift"),
+        (Modifier.ALT, "Alt"),
+    )
+    parts: list[str] = [name for value, name in modifier_names if modifier & value]
+    return "+".join(parts) if parts else "无"
 
 
 class KeyCode:
@@ -442,15 +456,8 @@ class CustomKeyManager:
         if combo.keycode == 0:
             return "无"
 
-        parts: list[str] = []
-        if combo.modifier & Modifier.CTRL:
-            parts.append("Ctrl")
-        if combo.modifier & Modifier.SHIFT:
-            parts.append("Shift")
-        if combo.modifier & Modifier.ALT:
-            parts.append("Alt")
-        if combo.modifier & Modifier.GUI:
-            parts.append("Win")
+        modifier_name: str = get_modifier_display_name(combo.modifier)
+        parts: list[str] = [] if modifier_name == "无" else [modifier_name]
 
         key_name: str = KEY_NAME_MAP.get(combo.keycode, f"0x{combo.keycode:02X}")
         parts.append(key_name)
@@ -515,15 +522,8 @@ class CustomKeyManager:
 
         # 生成显示文本
         combo: KeyCombo = key.combos[0]
-        parts: list[str] = []
-        if combo.modifier & Modifier.CTRL:
-            parts.append("Ctrl")
-        if combo.modifier & Modifier.SHIFT:
-            parts.append("Shift")
-        if combo.modifier & Modifier.ALT:
-            parts.append("Alt")
-        if combo.modifier & Modifier.GUI:
-            parts.append("Win")
+        modifier_name: str = get_modifier_display_name(combo.modifier)
+        parts: list[str] = [] if modifier_name == "无" else [modifier_name]
 
         key_name: str = KEY_NAME_MAP.get(combo.keycode, f"0x{combo.keycode:02X}")
         if key_name != "无":
@@ -556,15 +556,19 @@ def get_all_key_options() -> list[tuple[str, int]]:
 
 def get_modifier_options() -> list[tuple[str, int]]:
     """返回所有修饰键选项 [(显示名称, modifier_value), ...]"""
-    return [
-        ("无", Modifier.NONE),
-        ("Ctrl", Modifier.CTRL),
-        ("Shift", Modifier.SHIFT),
-        ("Alt", Modifier.ALT),
-        ("Win", Modifier.GUI),
-        ("Ctrl+Shift", Modifier.CTRL | Modifier.SHIFT),
-        ("Ctrl+Alt", Modifier.CTRL | Modifier.ALT),
-        ("Ctrl+Win", Modifier.CTRL | Modifier.GUI),
-        ("Shift+Alt", Modifier.SHIFT | Modifier.ALT),
-        ("Ctrl+Shift+Alt", Modifier.CTRL | Modifier.SHIFT | Modifier.ALT),
-    ]
+    modifier_values: tuple[int, ...] = (
+        Modifier.CTRL,
+        Modifier.SHIFT,
+        Modifier.ALT,
+        Modifier.GUI,
+    )
+    options: list[tuple[str, int]] = [("无", Modifier.NONE)]
+
+    for combination_size in range(1, len(modifier_values) + 1):
+        for selected_values in combinations(modifier_values, combination_size):
+            modifier: int = 0
+            for value in selected_values:
+                modifier |= value
+            options.append((get_modifier_display_name(modifier), modifier))
+
+    return options

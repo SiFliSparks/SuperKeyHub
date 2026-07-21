@@ -11,7 +11,7 @@ Unicode true
 ; Configuration
 ; ============================================================================
 !define APP_NAME "SuperKeyHUB"
-!define APP_VERSION "1.8.7"
+!define APP_VERSION "1.8.8"
 !define APP_AUTHOR "Jingle_xie"
 !define APP_DESCRIPTION "SuperKey Hardware Monitor"
 !define APP_URL "https://sparks.sifli.com/projects/superkey/"
